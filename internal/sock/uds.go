@@ -1,4 +1,4 @@
-package pipe
+package sock
 
 import (
 	"encoding/binary"
@@ -8,6 +8,7 @@ import (
 	"github.com/victor-leee/side-car/internal/config"
 	side_car "github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
 	"google.golang.org/protobuf/proto"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -16,7 +17,7 @@ import (
 	"syscall"
 )
 
-// TransitionMessage holds the data transferred through local named pipe and sends them to other side cars
+// TransitionMessage holds the data transferred through unix domain sock and sends them to other side cars
 type TransitionMessage struct {
 	HeaderLenBytes []byte
 	Header         *side_car.Header
@@ -24,31 +25,37 @@ type TransitionMessage struct {
 	Body           []byte
 }
 
-// file is the named pipe used to transfer data between services and side-car
+// file is the named sock used to transfer data between services and side-car
 var file *os.File
+
+// lis is used to receiver data from other side-cars
+var lis net.Listener
 
 func Init() error {
 	var err error
-	fileName := config.GetConfig().PipeName
-	if err = os.Remove(fileName); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err = syscall.Mkfifo(fileName, 0666); err != nil {
-		return err
-	}
-	if file, err = os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, os.ModeNamedPipe); err != nil {
-		return err
-	}
-	logrus.Info("open pipe file succeed")
+	fileName := config.GetConfig().SockPath
+	lis, err = net.Listen("unix", fileName)
 
-	return nil
+	return err
 }
 
 func Start() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	msgChan := make(chan *TransitionMessage)
-	go listenMsg(msgChan)
+	// local named sock
+	go listenMsg(file, msgChan)
+	// other side-cars
+	go func() {
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				logrus.Errorf("accept conn failed: %v", err)
+				continue
+			}
+			go listenMsg(conn, msgChan)
+		}
+	}()
 
 	select {
 	case <-sigs:
@@ -63,7 +70,7 @@ func Start() {
 }
 
 func handle(msg *TransitionMessage) error {
-	switch msg.Header.ReceiverType {
+	switch msg.Header.MessageType {
 	case side_car.Header_SIDE_CAR_PROXY:
 		return transferToProxy(msg)
 	case side_car.Header_CONFIG_CENTER:
@@ -73,6 +80,7 @@ func handle(msg *TransitionMessage) error {
 	}
 }
 
+// TODO use connection pool
 func transferToProxy(msg *TransitionMessage) error {
 	conn, err := net.Dial("tcp", msg.Header.ReceiverServiceName)
 	if err != nil {
@@ -114,7 +122,10 @@ func fetchConfig(msg *TransitionMessage) error {
 		return err
 	}
 
-	return transferToProxy(buildTransitionMessage(b))
+	transitionMsg := buildTransitionMessage(b)
+	transitionMsg.Header.ReceiverServiceName = msg.Header.SenderServiceName
+	transitionMsg.Header.MessageType = side_car.Header_CONFIG_CENTER
+	return transferToProxy(transitionMsg)
 }
 
 func buildTransitionMessage(body []byte) *TransitionMessage {
@@ -127,21 +138,22 @@ func buildTransitionMessage(body []byte) *TransitionMessage {
 
 	return &TransitionMessage{
 		HeaderLenBytes: headerLenBytes,
+		Header:         header,
 		RawHeader:      headerBytes,
 		Body:           body,
 	}
 }
 
-func listenMsg(msgChan chan<- *TransitionMessage) {
+func listenMsg(source io.Reader, msgChan chan<- *TransitionMessage) {
 	for {
 		// first block read the first 8 bytes, which is the length of the header
-		headerLenBytes, err := blockRead(8)
+		headerLenBytes, err := blockRead(source, 8)
 		if err != nil {
 			logrus.Fatalf("read header length failed: %v", err)
 		}
 		headerLen := binary.LittleEndian.Uint64(headerLenBytes)
 		// then block read the header with length of headerLen
-		headerBytes, err := blockRead(headerLen)
+		headerBytes, err := blockRead(source, headerLen)
 		if err != nil {
 			logrus.Fatalf("read header failed: %v", err)
 		}
@@ -150,7 +162,7 @@ func listenMsg(msgChan chan<- *TransitionMessage) {
 			logrus.Fatalf("unmarshal bytes to struct Header failed: %v", err)
 		}
 		// eventually read the body bytes
-		body, err := blockRead(header.BodySize)
+		body, err := blockRead(source, header.BodySize)
 		if err != nil {
 			logrus.Fatalf("read body failed: %v", err)
 		}
@@ -163,13 +175,13 @@ func listenMsg(msgChan chan<- *TransitionMessage) {
 	}
 }
 
-func blockRead(size uint64) ([]byte, error) {
+func blockRead(source io.Reader, size uint64) ([]byte, error) {
 	var b []byte
 	var already uint64
 	var inc int
 	var err error
 	for already < size {
-		if inc, err = file.Read(b); err != nil {
+		if inc, err = source.Read(b); err != nil {
 			return nil, err
 		}
 		already += uint64(inc)

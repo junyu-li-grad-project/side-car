@@ -3,18 +3,18 @@ package main
 import (
 	"github.com/sirupsen/logrus"
 	"github.com/victor-leee/side-car/internal/config"
-	"github.com/victor-leee/side-car/internal/pipe"
+	"github.com/victor-leee/side-car/internal/sock"
 )
 
 func main() {
 	if err := config.Init(); err != nil {
 		fail(err)
 	}
-	if err := pipe.Init(); err != nil {
+	if err := sock.Init(); err != nil {
 		fail(err)
 	}
 
-	pipe.Start()
+	sock.Start()
 }
 
 func fail(err error) {

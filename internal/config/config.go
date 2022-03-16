@@ -3,19 +3,19 @@ package config
 import "flag"
 
 type Config struct {
-	PipeName             string
+	SockPath             string
 	ConfigCenterHostname string
 }
 
 var cfg *Config
 
 func Init() error {
-	var pipeName, ccHostname string
-	flag.StringVar(&pipeName, "pipe", "/tmp/sc.pipe", "specify the pipe key")
+	var sockPath, ccHostname string
+	flag.StringVar(&sockPath, "sock", "/tmp/sc.sock", "specify the sock path")
 	flag.StringVar(&ccHostname, "cc", "cc", "specify config center host name")
 	flag.Parse()
 	cfg = &Config{
-		PipeName:             pipeName,
+		SockPath:             sockPath,
 		ConfigCenterHostname: ccHostname,
 	}
 
