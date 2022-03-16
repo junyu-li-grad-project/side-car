@@ -3,7 +3,9 @@ package pool
 import (
 	"errors"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"net"
+	"time"
 )
 
 type tcpConnPool struct {
@@ -29,11 +31,60 @@ func NewTcpConnPool(opts ...TCPConnOption) (ConnPool, error) {
 }
 
 func (p *tcpConnPool) Get() (net.Conn, error) {
+	select {
+	case conn := <-p.connChan:
+		return conn, nil
+	default:
+		// try to create one, if failed block wait the channel
+		if !p.requestTicket() {
+			return <-p.connChan, nil
+		}
 
+		return p.factory()
+	}
 }
 
 func (p *tcpConnPool) Put(conn net.Conn) error {
+	// before we put back the connection to the pool, we should check its status
+	if p.isBrokenConn(conn) {
+		// for each broken connection we allow one more creation
+		p.createTicket()
+		return errors.New("connection is broken")
+	}
+	p.connChan <- conn
 
+	return nil
+}
+
+func (p *tcpConnPool) isBrokenConn(conn net.Conn) (broken bool) {
+	defer func() {
+		// set read deadline "never"
+		if err := conn.SetReadDeadline(time.Time{}); err != nil {
+			broken = true
+		}
+	}()
+
+	if err := conn.SetReadDeadline(time.Now()); err != nil {
+		logrus.Errorf("set deadline failed, err:%v", err)
+		return true
+	}
+	b := make([]byte, 1)
+	if _, err := conn.Read(b); err != nil {
+		if p.isReadTimeoutErr(err) {
+			return false
+		}
+		logrus.Errorf("found a broken connection: %v", err)
+	}
+
+	return true
+}
+
+func (p *tcpConnPool) isReadTimeoutErr(err error) bool {
+	if netErr, ok := err.(*net.OpError); ok {
+		return netErr.Timeout()
+	}
+
+	return false
 }
 
 func (p *tcpConnPool) init() error {
