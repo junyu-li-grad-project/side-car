@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type tcpConnPool struct {
+type pool struct {
 	factory    func() (net.Conn, error)
 	initConn   int
 	maxConn    int
@@ -16,10 +16,10 @@ type tcpConnPool struct {
 	ticketChan chan struct{}
 }
 
-type TCPConnOption func(pool *tcpConnPool)
+type Opt func(pool *pool)
 
-func NewTcpConnPool(opts ...TCPConnOption) (ConnPool, error) {
-	p := &tcpConnPool{}
+func New(opts ...Opt) (ConnPool, error) {
+	p := &pool{}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -30,7 +30,7 @@ func NewTcpConnPool(opts ...TCPConnOption) (ConnPool, error) {
 	return p, nil
 }
 
-func (p *tcpConnPool) Get() (net.Conn, error) {
+func (p *pool) Get() (net.Conn, error) {
 	select {
 	case conn := <-p.connChan:
 		return conn, nil
@@ -44,7 +44,7 @@ func (p *tcpConnPool) Get() (net.Conn, error) {
 	}
 }
 
-func (p *tcpConnPool) Put(conn net.Conn) error {
+func (p *pool) Put(conn net.Conn) error {
 	// before we put back the connection to the pool, we should check its status
 	if p.isBrokenConn(conn) {
 		// for each broken connection we allow one more creation
@@ -56,7 +56,7 @@ func (p *tcpConnPool) Put(conn net.Conn) error {
 	return nil
 }
 
-func (p *tcpConnPool) isBrokenConn(conn net.Conn) (broken bool) {
+func (p *pool) isBrokenConn(conn net.Conn) (broken bool) {
 	defer func() {
 		// set read deadline "never"
 		if err := conn.SetReadDeadline(time.Time{}); err != nil {
@@ -79,7 +79,7 @@ func (p *tcpConnPool) isBrokenConn(conn net.Conn) (broken bool) {
 	return true
 }
 
-func (p *tcpConnPool) isReadTimeoutErr(err error) bool {
+func (p *pool) isReadTimeoutErr(err error) bool {
 	if netErr, ok := err.(*net.OpError); ok {
 		return netErr.Timeout()
 	}
@@ -87,7 +87,7 @@ func (p *tcpConnPool) isReadTimeoutErr(err error) bool {
 	return false
 }
 
-func (p *tcpConnPool) init() error {
+func (p *pool) init() error {
 	if p.initConn > p.maxConn {
 		return fmt.Errorf("initConn shouldn't exceed maxConn, actual is %d > %d", p.initConn, p.maxConn)
 	}
@@ -120,7 +120,7 @@ func (p *tcpConnPool) init() error {
 	return nil
 }
 
-func (p *tcpConnPool) requestTicket() (success bool) {
+func (p *pool) requestTicket() (success bool) {
 	select {
 	case <-p.ticketChan:
 		return true
@@ -129,27 +129,27 @@ func (p *tcpConnPool) requestTicket() (success bool) {
 	}
 }
 
-func (p *tcpConnPool) createTicket() {
+func (p *pool) createTicket() {
 	select {
 	case p.ticketChan <- struct{}{}:
 	default:
 	}
 }
 
-func WithTCPFactory(f func() (net.Conn, error)) TCPConnOption {
-	return func(pool *tcpConnPool) {
+func WithFactory(f func() (net.Conn, error)) Opt {
+	return func(pool *pool) {
 		pool.factory = f
 	}
 }
 
-func WithInitSize(s int) TCPConnOption {
-	return func(pool *tcpConnPool) {
+func WithInitSize(s int) Opt {
+	return func(pool *pool) {
 		pool.initConn = s
 	}
 }
 
-func WithMaxSize(s int) TCPConnOption {
-	return func(pool *tcpConnPool) {
+func WithMaxSize(s int) Opt {
+	return func(pool *pool) {
 		pool.maxConn = s
 	}
 }

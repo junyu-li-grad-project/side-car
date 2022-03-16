@@ -25,47 +25,64 @@ type TransitionMessage struct {
 	Body           []byte
 }
 
-// file is the named sock used to transfer data between services and side-car
-var file *os.File
+// localLis is used to receive data from other containers within the same pod
+var localLis net.Listener
 
-// lis is used to receiver data from other side-cars
-var lis net.Listener
+// remoteLis is used to receive data from other side-car proxy
+var remoteLis net.Listener
 
 func Init() error {
 	var err error
 	fileName := config.GetConfig().SockPath
-	lis, err = net.Listen("unix", fileName)
+	localLis, err = net.Listen("unix", fileName)
+	if err != nil {
+		logrus.Errorf("[Init] listen local sock failed: %v", err)
+		return err
+	}
+	remoteLis, err = net.Listen("tcp", fmt.Sprintf(":%d", config.GetConfig().SideCarPort))
+	if err != nil {
+		logrus.Errorf("[Init] listen port %d failed: %v", config.GetConfig().SideCarPort, err)
+		return err
+	}
 
-	return err
+	return nil
 }
 
 func Start() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	msgChan := make(chan *TransitionMessage)
-	// local named sock
-	go listenMsg(file, msgChan)
-	// other side-cars
-	go func() {
-		for {
-			conn, err := lis.Accept()
-			if err != nil {
-				logrus.Errorf("accept conn failed: %v", err)
-				continue
-			}
-			go listenMsg(conn, msgChan)
-		}
-	}()
+	go waitConn(localLis, msgChan)
+	go waitConn(remoteLis, msgChan)
 
 	select {
 	case <-sigs:
-		logrus.Infof("received signal to terminate process")
+		logrus.Infof("[Start] received signal to terminate process")
+
 		close(msgChan)
-		logrus.Infof("side car shut down gracefully")
+		if err := localLis.Close(); err != nil {
+			logrus.Errorf("[Start] close local listener failed: %v", err)
+		}
+		if err := remoteLis.Close(); err != nil {
+			logrus.Errorf("[Start] close remote listener failed: %v", err)
+		}
+
+		logrus.Infof("[Start] side car shut down gracefully")
 	case msg := <-msgChan:
 		if err := handle(msg); err != nil {
-			logrus.Errorf("handle message failed: %v", err)
+			logrus.Errorf("[Start] handle message failed: %v", err)
 		}
+	}
+}
+
+func waitConn(lis net.Listener, msgChan chan *TransitionMessage) {
+	for {
+		conn, err := lis.Accept()
+		if err != nil {
+			logrus.Errorf("[wantConn] accept conn failed: %v", err)
+			continue
+		}
+		go waitMsg(conn, msgChan)
 	}
 }
 
@@ -76,7 +93,7 @@ func handle(msg *TransitionMessage) error {
 	case side_car.Header_CONFIG_CENTER:
 		return fetchConfig(msg)
 	default:
-		return errors.New("unknown receiver type")
+		return errors.New("[handle] unknown receiver type")
 	}
 }
 
@@ -144,7 +161,7 @@ func buildTransitionMessage(body []byte) *TransitionMessage {
 	}
 }
 
-func listenMsg(source io.Reader, msgChan chan<- *TransitionMessage) {
+func waitMsg(source io.Reader, msgChan chan<- *TransitionMessage) {
 	for {
 		// first block read the first 8 bytes, which is the length of the header
 		headerLenBytes, err := blockRead(source, 8)
