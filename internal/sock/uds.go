@@ -1,13 +1,12 @@
 package sock
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"github.com/victor-leee/side-car/internal/config"
+	"github.com/victor-leee/side-car/internal/message"
 	side_car "github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"io/ioutil"
 	"net"
@@ -16,14 +15,6 @@ import (
 	"os/signal"
 	"syscall"
 )
-
-// TransitionMessage holds the data transferred through unix domain sock and sends them to other side cars
-type TransitionMessage struct {
-	HeaderLenBytes []byte
-	Header         *side_car.Header
-	RawHeader      []byte
-	Body           []byte
-}
 
 // localLis is used to receive data from other containers within the same pod
 var localLis net.Listener
@@ -51,7 +42,7 @@ func Init() error {
 func Start() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	msgChan := make(chan *TransitionMessage)
+	msgChan := make(chan *message.Message)
 	go waitConn(localLis, msgChan)
 	go waitConn(remoteLis, msgChan)
 
@@ -75,7 +66,7 @@ func Start() {
 	}
 }
 
-func waitConn(lis net.Listener, msgChan chan *TransitionMessage) {
+func waitConn(lis net.Listener, msgChan chan *message.Message) {
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
@@ -86,10 +77,10 @@ func waitConn(lis net.Listener, msgChan chan *TransitionMessage) {
 	}
 }
 
-func handle(msg *TransitionMessage) error {
+func handle(msg *message.Message) error {
 	switch msg.Header.MessageType {
 	case side_car.Header_SIDE_CAR_PROXY:
-		return transferToProxy(msg)
+		return transferToSocket(msg)
 	case side_car.Header_CONFIG_CENTER:
 		return fetchConfig(msg)
 	default:
@@ -97,30 +88,12 @@ func handle(msg *TransitionMessage) error {
 	}
 }
 
-// TODO use connection pool
-func transferToProxy(msg *TransitionMessage) error {
-	conn, err := net.Dial("tcp", msg.Header.ReceiverServiceName)
-	if err != nil {
-		logrus.Errorf("transfer to other side car , dial failed: %v", err)
-		return err
-	}
-	if _, err = conn.Write(msg.HeaderLenBytes); err != nil {
-		logrus.Errorf("transferToProxy write header length bytes failed: %v", err)
-		return err
-	}
-	if _, err = conn.Write(msg.RawHeader); err != nil {
-		logrus.Errorf("transferToProxy write header bytes failed: %v", err)
-		return err
-	}
-	if _, err = conn.Write(msg.Body); err != nil {
-		logrus.Errorf("transferToProxy write body bytes failed: %v", err)
-		return err
-	}
+func transferToSocket(msg *message.Message) error {
 
 	return nil
 }
 
-func fetchConfig(msg *TransitionMessage) error {
+func fetchConfig(msg *message.Message) error {
 	configCenterURL :=
 		fmt.Sprintf("http://%s/v2/keys/%s", config.GetConfig().ConfigCenterHostname, msg.Header.SenderServiceName)
 	resp, err := http.Get(configCenterURL)
@@ -139,56 +112,20 @@ func fetchConfig(msg *TransitionMessage) error {
 		return err
 	}
 
-	transitionMsg := buildTransitionMessage(b)
+	transitionMsg := message.FromBody(b)
 	transitionMsg.Header.ReceiverServiceName = msg.Header.SenderServiceName
 	transitionMsg.Header.MessageType = side_car.Header_CONFIG_CENTER
-	return transferToProxy(transitionMsg)
+	return transferToSocket(transitionMsg)
 }
 
-func buildTransitionMessage(body []byte) *TransitionMessage {
-	header := &side_car.Header{
-		BodySize: uint64(len(body)),
-	}
-	headerBytes, _ := proto.Marshal(header)
-	headerLenBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(headerLenBytes, uint64(len(headerBytes)))
-
-	return &TransitionMessage{
-		HeaderLenBytes: headerLenBytes,
-		Header:         header,
-		RawHeader:      headerBytes,
-		Body:           body,
-	}
-}
-
-func waitMsg(source io.Reader, msgChan chan<- *TransitionMessage) {
+func waitMsg(source io.Reader, msgChan chan<- *message.Message) {
 	for {
-		// first block read the first 8 bytes, which is the length of the header
-		headerLenBytes, err := blockRead(source, 8)
+		msg, err := message.FromReader(source, blockRead)
 		if err != nil {
-			logrus.Fatalf("read header length failed: %v", err)
+			logrus.Errorf("[waitMsg] read message failed: %v", err)
+			continue
 		}
-		headerLen := binary.LittleEndian.Uint64(headerLenBytes)
-		// then block read the header with length of headerLen
-		headerBytes, err := blockRead(source, headerLen)
-		if err != nil {
-			logrus.Fatalf("read header failed: %v", err)
-		}
-		header := &side_car.Header{}
-		if err = proto.Unmarshal(headerBytes, header); err != nil {
-			logrus.Fatalf("unmarshal bytes to struct Header failed: %v", err)
-		}
-		// eventually read the body bytes
-		body, err := blockRead(source, header.BodySize)
-		if err != nil {
-			logrus.Fatalf("read body failed: %v", err)
-		}
-		msgChan <- &TransitionMessage{
-			HeaderLenBytes: headerLenBytes,
-			Header:         header,
-			RawHeader:      headerBytes,
-			Body:           body,
-		}
+		msgChan <- msg
 	}
 }
 
