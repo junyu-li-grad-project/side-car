@@ -2,7 +2,9 @@ package pool
 
 import "net"
 
-//go:generate mockgen -destination ../mock/mock_conn_pool.go -source ./conn_pool.go
+type ConnPoolFactory func() (ConnPool, error)
+
+//go:generate mockgen -destination ../mock/conn_pool/mock.go -source ./conn_pool.go
 type ConnPool interface {
 	Get() (net.Conn, error)
 	Put(conn net.Conn) error

@@ -16,9 +16,9 @@ type pool struct {
 	ticketChan chan struct{}
 }
 
-type Opt func(pool *pool)
+type opt func(pool *pool)
 
-func New(opts ...Opt) (ConnPool, error) {
+func New(opts ...opt) (ConnPool, error) {
 	p := &pool{}
 	for _, opt := range opts {
 		opt(p)
@@ -136,19 +136,19 @@ func (p *pool) createTicket() {
 	}
 }
 
-func WithFactory(f func() (net.Conn, error)) Opt {
+func WithFactory(f func() (net.Conn, error)) opt {
 	return func(pool *pool) {
 		pool.factory = f
 	}
 }
 
-func WithInitSize(s int) Opt {
+func WithInitSize(s int) opt {
 	return func(pool *pool) {
 		pool.initConn = s
 	}
 }
 
-func WithMaxSize(s int) Opt {
+func WithMaxSize(s int) opt {
 	return func(pool *pool) {
 		pool.maxConn = s
 	}
