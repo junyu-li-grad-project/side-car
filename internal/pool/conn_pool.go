@@ -8,4 +8,5 @@ type ConnPoolFactory func() (ConnPool, error)
 type ConnPool interface {
 	Get() (net.Conn, error)
 	Put(conn net.Conn) error
+	Close() error
 }

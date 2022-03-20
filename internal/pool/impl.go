@@ -16,9 +16,9 @@ type pool struct {
 	ticketChan chan struct{}
 }
 
-type opt func(pool *pool)
+type Opt func(pool *pool)
 
-func New(opts ...opt) (ConnPool, error) {
+func New(opts ...Opt) (ConnPool, error) {
 	p := &pool{}
 	for _, opt := range opts {
 		opt(p)
@@ -87,6 +87,11 @@ func (p *pool) isReadTimeoutErr(err error) bool {
 	return false
 }
 
+func (p *pool) Close() error {
+	// TODO impl
+	panic("todo")
+}
+
 func (p *pool) init() error {
 	if p.initConn > p.maxConn {
 		return fmt.Errorf("initConn shouldn't exceed maxConn, actual is %d > %d", p.initConn, p.maxConn)
@@ -136,19 +141,19 @@ func (p *pool) createTicket() {
 	}
 }
 
-func WithFactory(f func() (net.Conn, error)) opt {
+func WithFactory(f func() (net.Conn, error)) Opt {
 	return func(pool *pool) {
 		pool.factory = f
 	}
 }
 
-func WithInitSize(s int) opt {
+func WithInitSize(s int) Opt {
 	return func(pool *pool) {
 		pool.initConn = s
 	}
 }
 
-func WithMaxSize(s int) opt {
+func WithMaxSize(s int) Opt {
 	return func(pool *pool) {
 		pool.maxConn = s
 	}
