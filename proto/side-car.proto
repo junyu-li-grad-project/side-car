@@ -12,6 +12,8 @@ message Header {
     CONFIG_CENTER = 0;
     // SIDE_CAR_PROXY means the request would be routed to another side-car proxy using route table
     SIDE_CAR_PROXY = 1;
+    // SET_USAGE is bonded with InitConnectionReq to classify the connection usage between apps and side-cars
+    SET_USAGE = 2;
   }
   RPCMessageType message_type = 2;
   // sender_service_name is the service name of the sender (configured in fe, unique globally)
@@ -24,7 +26,28 @@ message Header {
   map <string, string> extra = 99999;
 }
 
+message BaseResponse {
+  enum Code {
+    CODE_SUCCESS = 0;
+    CODE_ERROR = 1;
+  }
+  Code code = 1;
+  string message = 2;
+}
+
 // GetConfigReq is used to fetch config data from config center
 message GetConfigReq {
   string service_name = 1;
+}
+
+// InitConnectionReq is sent from sdk when connections are established(for each connection)
+// It is meant to make the side car capable to send requests from other side cars to internal apps
+message InitConnectionReq {
+  enum ConnectionType {
+    // APP_TO_CAR means the app sends request and block wait response from the connection
+    CONNECTION_TYPE_APP_TO_CAR = 0;
+    // CAR_TO_APP means the side car sends request and block wait response from the apps
+    CONNECTION_TYPE_CAR_TO_APP = 1;
+  }
+  ConnectionType connection_type = 1;
 }

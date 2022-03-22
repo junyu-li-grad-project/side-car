@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"github.com/victor-leee/side-car/internal/config"
+	"github.com/victor-leee/side-car/internal/connection"
 	"github.com/victor-leee/side-car/internal/message"
 	side_car "github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
+	"google.golang.org/protobuf/proto"
 	"io"
 	"io/ioutil"
 	"net"
@@ -42,55 +44,84 @@ func Init() error {
 func Start() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	msgChan := make(chan *message.Message)
-	go waitConn(localLis, msgChan)
-	go waitConn(remoteLis, msgChan)
+	go waitConn(localLis)
+	go waitConn(remoteLis)
 
-	select {
-	case <-sigs:
-		logrus.Infof("[Start] received signal to terminate process")
+	<-sigs
+	logrus.Infof("[Start] received signal to terminate process")
 
-		close(msgChan)
-		if err := localLis.Close(); err != nil {
-			logrus.Errorf("[Start] close local listener failed: %v", err)
-		}
-		if err := remoteLis.Close(); err != nil {
-			logrus.Errorf("[Start] close remote listener failed: %v", err)
-		}
-
-		logrus.Infof("[Start] side car shut down gracefully")
-	case msg := <-msgChan:
-		if err := handle(msg); err != nil {
-			logrus.Errorf("[Start] handle message failed: %v", err)
-		}
+	if err := localLis.Close(); err != nil {
+		logrus.Errorf("[Start] close local listener failed: %v", err)
 	}
+	if err := remoteLis.Close(); err != nil {
+		logrus.Errorf("[Start] close remote listener failed: %v", err)
+	}
+
+	logrus.Infof("[Start] side car shut down gracefully")
 }
 
-func waitConn(lis net.Listener, msgChan chan *message.Message) {
+func waitConn(lis net.Listener) {
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
 			logrus.Errorf("[wantConn] accept conn failed: %v", err)
 			continue
 		}
-		go waitMsg(conn, msgChan)
+		go waitMsg(conn)
 	}
 }
 
-func handle(msg *message.Message) error {
+func handle(msg *message.Message, conn net.Conn) error {
 	switch msg.Header.MessageType {
 	case side_car.Header_SIDE_CAR_PROXY:
 		return transferToSocket(msg)
 	case side_car.Header_CONFIG_CENTER:
 		return fetchConfig(msg)
+	case side_car.Header_SET_USAGE:
+		err := setUsage(msg, conn)
+		// anyway we should notify the app whether the connection is registered successfully or not
+		resp := &side_car.BaseResponse{
+			Code: side_car.BaseResponse_CODE_SUCCESS,
+		}
+		if err != nil {
+			logrus.Errorf("[uds.handle] setUsage failed: %v", err)
+			resp = &side_car.BaseResponse{
+				Code: side_car.BaseResponse_CODE_ERROR,
+			}
+		}
+		_, err = message.FromProtoMessage(resp).Write(conn)
+		if err != nil {
+			logrus.Errorf("[uds.handle] write baseResponse back to app failed: %v", err)
+		}
+
+		return err
 	default:
 		return errors.New("[handle] unknown receiver type")
 	}
 }
 
-func transferToSocket(msg *message.Message) error {
+func setUsage(msg *message.Message, conn net.Conn) error {
+	req := &side_car.InitConnectionReq{}
+	if err := proto.Unmarshal(msg.Body, req); err != nil {
+		logrus.Errorf("[uds.setUsage] unmarshal body failed: %v", err)
+		return err
+	}
+	switch req.ConnectionType {
+	case side_car.InitConnectionReq_CONNECTION_TYPE_APP_TO_CAR:
+		// for this type we do nothing
+	case side_car.InitConnectionReq_CONNECTION_TYPE_CAR_TO_APP:
+		// for this type we put the connection to the pool
+		return connection.GlobalConnManager().Put(msg.Header.SenderServiceName, conn)
+	}
 
-	return nil
+	return fmt.Errorf("unknown connection type %v", req.ConnectionType)
+}
+
+func transferToSocket(msg *message.Message) error {
+	return connection.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
+		_, err := msg.Write(conn)
+		return err
+	})
 }
 
 func fetchConfig(msg *message.Message) error {
@@ -118,14 +149,14 @@ func fetchConfig(msg *message.Message) error {
 	return transferToSocket(transitionMsg)
 }
 
-func waitMsg(source io.Reader, msgChan chan<- *message.Message) {
+func waitMsg(conn net.Conn) {
 	for {
-		msg, err := message.FromReader(source, blockRead)
+		msg, err := message.FromReader(conn, blockRead)
 		if err != nil {
 			logrus.Errorf("[waitMsg] read message failed: %v", err)
 			continue
 		}
-		msgChan <- msg
+		handle(msg, conn)
 	}
 }
 

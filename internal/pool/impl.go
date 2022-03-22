@@ -9,17 +9,23 @@ import (
 )
 
 type pool struct {
-	factory    func() (net.Conn, error)
-	initConn   int
-	maxConn    int
+	opts       *options
 	connChan   chan net.Conn
 	ticketChan chan struct{}
+}
+
+type options struct {
+	factory  func() (net.Conn, error)
+	initConn int
+	maxConn  int
 }
 
 type Opt func(pool *pool)
 
 func New(opts ...Opt) (ConnPool, error) {
-	p := &pool{}
+	p := &pool{
+		opts: &options{},
+	}
 	for _, opt := range opts {
 		opt(p)
 	}
@@ -40,7 +46,7 @@ func (p *pool) Get() (net.Conn, error) {
 			return <-p.connChan, nil
 		}
 
-		return p.factory()
+		return p.opts.factory()
 	}
 }
 
@@ -93,27 +99,27 @@ func (p *pool) Close() error {
 }
 
 func (p *pool) init() error {
-	if p.initConn > p.maxConn {
-		return fmt.Errorf("initConn shouldn't exceed maxConn, actual is %d > %d", p.initConn, p.maxConn)
+	if p.opts.initConn > p.opts.maxConn {
+		return fmt.Errorf("initConn shouldn't exceed maxConn, actual is %d > %d", p.opts.initConn, p.opts.maxConn)
 	}
-	if p.factory == nil {
+	if p.opts.factory == nil {
 		return errors.New("must provide factory method to generate new connection")
 	}
-	if p.maxConn <= 0 {
+	if p.opts.maxConn <= 0 {
 		return errors.New("a pool should be allowed to contain resources, otherwise it's unnecessary to create one")
 	}
 
-	p.ticketChan = make(chan struct{}, p.maxConn)
-	for i := 0; i < p.maxConn; i++ {
+	p.ticketChan = make(chan struct{}, p.opts.maxConn)
+	for i := 0; i < p.opts.maxConn; i++ {
 		p.createTicket()
 	}
 
-	p.connChan = make(chan net.Conn, p.maxConn)
-	for i := 0; i < p.initConn; i++ {
+	p.connChan = make(chan net.Conn, p.opts.maxConn)
+	for i := 0; i < p.opts.initConn; i++ {
 		if !p.requestTicket() {
 			return errors.New("request ticket to create connection failed")
 		}
-		conn, err := p.factory()
+		conn, err := p.opts.factory()
 		if err != nil {
 			// failed ? no worry, retry later
 			p.createTicket()
@@ -143,18 +149,18 @@ func (p *pool) createTicket() {
 
 func WithFactory(f func() (net.Conn, error)) Opt {
 	return func(pool *pool) {
-		pool.factory = f
+		pool.opts.factory = f
 	}
 }
 
 func WithInitSize(s int) Opt {
 	return func(pool *pool) {
-		pool.initConn = s
+		pool.opts.initConn = s
 	}
 }
 
 func WithMaxSize(s int) Opt {
 	return func(pool *pool) {
-		pool.maxConn = s
+		pool.opts.maxConn = s
 	}
 }

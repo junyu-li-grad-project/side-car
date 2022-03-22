@@ -16,6 +16,11 @@ type Message struct {
 	Body           []byte
 }
 
+func FromProtoMessage(msg proto.Message) *Message {
+	b, _ := proto.Marshal(msg)
+	return FromBody(b)
+}
+
 // FromBody builds a Message directly with information of the body bytes(build header&headerLength)
 func FromBody(body []byte) *Message {
 	header := &side_car.Header{

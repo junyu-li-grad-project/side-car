@@ -2,7 +2,7 @@ package pool
 
 import "net"
 
-type ConnPoolFactory func() (ConnPool, error)
+type ConnPoolFactory func(cname string) (ConnPool, error)
 
 //go:generate mockgen -destination ../mock/conn_pool/mock.go -source ./conn_pool.go
 type ConnPool interface {
