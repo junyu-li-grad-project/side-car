@@ -71,7 +71,30 @@ func waitConn(lis net.Listener) {
 	}
 }
 
-func handle(msg *message.Message, conn net.Conn) error {
+func waitMsg(conn net.Conn) {
+	for {
+		msg, err := message.FromReader(conn, blockRead)
+		if err != nil {
+			logrus.Errorf("[waitMsg] read message failed: %v", err)
+			continue
+		}
+		handle(msg, conn)
+	}
+}
+
+func handle(msg *message.Message, conn net.Conn) {
+	respMsg, err := handleRequest(msg, conn)
+	if err != nil {
+		logrus.Errorf("[uds.handle] handleRequest failed: %v", err)
+		return
+	}
+	if err = handleResponse(respMsg, conn); err != nil {
+		logrus.Errorf("[uds.handle] handleResponse failed: %v", err)
+		return
+	}
+}
+
+func handleRequest(msg *message.Message, conn net.Conn) (*message.Message, error) {
 	switch msg.Header.MessageType {
 	case side_car.Header_SIDE_CAR_PROXY:
 		return transferToSocket(msg)
@@ -84,20 +107,21 @@ func handle(msg *message.Message, conn net.Conn) error {
 			Code: side_car.BaseResponse_CODE_SUCCESS,
 		}
 		if err != nil {
-			logrus.Errorf("[uds.handle] setUsage failed: %v", err)
+			logrus.Errorf("[uds.handleRequest] setUsage failed: %v", err)
 			resp = &side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
 			}
 		}
-		_, err = message.FromProtoMessage(resp).Write(conn)
-		if err != nil {
-			logrus.Errorf("[uds.handle] write baseResponse back to app failed: %v", err)
-		}
 
-		return err
+		return message.FromProtoMessage(resp), err
 	default:
-		return errors.New("[handle] unknown receiver type")
+		return nil, errors.New("[handleRequest] unknown receiver type")
 	}
+}
+
+func handleResponse(req *message.Message, conn net.Conn) error {
+	_, err := req.Write(conn)
+	return err
 }
 
 func setUsage(msg *message.Message, conn net.Conn) error {
@@ -117,20 +141,38 @@ func setUsage(msg *message.Message, conn net.Conn) error {
 	return fmt.Errorf("unknown connection type %v", req.ConnectionType)
 }
 
-func transferToSocket(msg *message.Message) error {
-	return connection.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
-		_, err := msg.Write(conn)
-		return err
+// transferToSocket is used in two scenarios
+// the first is that side-car communicates with local apps
+// the second is that side-car communicates with other side-cars
+// both cases the side-car will write message and then block to read a message
+func transferToSocket(msg *message.Message) (*message.Message, error) {
+	var retMsg *message.Message
+	var retErr error
+	connection.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
+		_, retErr = msg.Write(conn)
+		if retErr != nil {
+			logrus.Errorf("[transferToSocket] write message to %v failed: %v", msg.Header.ReceiverServiceName, retErr)
+			return nil
+		}
+		retMsg, retErr = message.FromReader(conn, blockRead)
+		if retErr != nil {
+			logrus.Errorf("[transferToSocket] read message from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
+			return nil
+		}
+
+		return nil
 	})
+
+	return retMsg, retErr
 }
 
-func fetchConfig(msg *message.Message) error {
+func fetchConfig(msg *message.Message) (*message.Message, error) {
 	configCenterURL :=
 		fmt.Sprintf("http://%s/v2/keys/%s", config.GetConfig().ConfigCenterHostname, msg.Header.SenderServiceName)
 	resp, err := http.Get(configCenterURL)
 	if err != nil {
 		logrus.Errorf("fetch config failed: %v", err)
-		return err
+		return nil, err
 	}
 	defer func() {
 		if err = resp.Body.Close(); err != nil {
@@ -140,24 +182,10 @@ func fetchConfig(msg *message.Message) error {
 	b, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		logrus.Errorf("fetch config read body failed: %v", err)
-		return err
+		return nil, err
 	}
 
-	transitionMsg := message.FromBody(b)
-	transitionMsg.Header.ReceiverServiceName = msg.Header.SenderServiceName
-	transitionMsg.Header.MessageType = side_car.Header_CONFIG_CENTER
-	return transferToSocket(transitionMsg)
-}
-
-func waitMsg(conn net.Conn) {
-	for {
-		msg, err := message.FromReader(conn, blockRead)
-		if err != nil {
-			logrus.Errorf("[waitMsg] read message failed: %v", err)
-			continue
-		}
-		handle(msg, conn)
-	}
+	return message.FromBody(b), nil
 }
 
 func blockRead(source io.Reader, size uint64) ([]byte, error) {
