@@ -9,26 +9,24 @@ type Config struct {
 	SideCarPort uint16
 	// ConfigCenterHostname is used to stand for the config center
 	ConfigCenterHostname string
+	// InitialPoolSize is the initial size state of connection pools
+	InitialPoolSize int
+	// MaxPoolSize is the maximum size state of connection pools
+	MaxPoolSize int
 }
 
-var cfg *Config
-
-func Init() error {
+func Init() (*Config, error) {
 	var sockPath, ccHostname string
 	var sideCarPort uint
 	flag.StringVar(&sockPath, "sock", "/tmp/sc.sock", "specify the sock path")
 	flag.UintVar(&sideCarPort, "port", 56789, "specify the side-car port")
 	flag.StringVar(&ccHostname, "cc", "cc", "specify config center host name")
 	flag.Parse()
-	cfg = &Config{
+	cfg := &Config{
 		SockPath:             sockPath,
 		SideCarPort:          uint16(sideCarPort),
 		ConfigCenterHostname: ccHostname,
 	}
 
-	return nil
-}
-
-func GetConfig() *Config {
-	return cfg
+	return cfg, nil
 }
