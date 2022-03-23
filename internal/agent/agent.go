@@ -34,9 +34,8 @@ type proxyAgentImpl struct {
 	localLis net.Listener
 	// remoteLis is used to receive data from other side-car proxy
 	remoteLis net.Listener
-	// sigChan is used to receive termination signs sent from os to clean up resources before shutting down
-	sigChan chan os.Signal
-	cfg     *config.Config
+	// cfg is local config
+	cfg *config.Config
 }
 
 func Init(cfg *config.Config) (ProxyAgent, error) {
@@ -65,7 +64,9 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 }
 
 func (a *proxyAgentImpl) WaitTermination(beforeCleanup, postCleanup Hook) error {
-	<-a.sigChan
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	<-sigs
 	beforeCleanup()
 	if err := a.localLis.Close(); err != nil {
 		logrus.Errorf("[WaitTermination] close local listener failed: %v", err)
@@ -81,9 +82,6 @@ func (a *proxyAgentImpl) WaitTermination(beforeCleanup, postCleanup Hook) error 
 }
 
 func (a *proxyAgentImpl) Start() {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	a.sigChan = sigs
 	go a.waitConn(a.localLis)
 	go a.waitConn(a.remoteLis)
 }
@@ -118,11 +116,11 @@ func (a *proxyAgentImpl) waitMsg(conn net.Conn) {
 func (a *proxyAgentImpl) handle(msg *message.Message, conn net.Conn) {
 	respMsg, err := a.handleRequest(msg, conn)
 	if err != nil {
-		logrus.Errorf("[uds.handle] handleRequest failed: %v", err)
+		logrus.Errorf("[agent.handle] handleRequest failed: %v", err)
 		return
 	}
 	if err = a.handleResponse(respMsg, conn); err != nil {
-		logrus.Errorf("[uds.handle] handleResponse failed: %v", err)
+		logrus.Errorf("[agent.handle] handleResponse failed: %v", err)
 		return
 	}
 }
@@ -134,19 +132,15 @@ func (a *proxyAgentImpl) handleRequest(msg *message.Message, conn net.Conn) (*me
 	case side_car.Header_CONFIG_CENTER:
 		return a.fetchConfig(msg)
 	case side_car.Header_SET_USAGE:
-		err := a.setUsage(msg, conn)
-		// anyway we should notify the app whether the connection is registered successfully or not
-		resp := &side_car.BaseResponse{
-			Code: side_car.BaseResponse_CODE_SUCCESS,
-		}
-		if err != nil {
-			logrus.Errorf("[uds.handleRequest] setUsage failed: %v", err)
-			resp = &side_car.BaseResponse{
+		if err := a.setUsage(msg, conn); err != nil {
+			return message.FromProtoMessage(&side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
-			}
+			}, nil), fmt.Errorf("[agent.handleRequest]: %w", err)
 		}
 
-		return message.FromProtoMessage(resp), err
+		return message.FromProtoMessage(&side_car.BaseResponse{
+			Code: side_car.BaseResponse_CODE_SUCCESS,
+		}, nil), nil
 	default:
 		return nil, errors.New("[handleRequest] unknown receiver type")
 	}
@@ -160,12 +154,12 @@ func (a *proxyAgentImpl) handleResponse(req *message.Message, conn net.Conn) err
 func (a *proxyAgentImpl) setUsage(msg *message.Message, conn net.Conn) error {
 	req := &side_car.InitConnectionReq{}
 	if err := proto.Unmarshal(msg.Body, req); err != nil {
-		logrus.Errorf("[uds.setUsage] unmarshal body failed: %v", err)
-		return err
+		return fmt.Errorf("[agent.setUsage] unmarshal body failed: %w", err)
 	}
 	switch req.ConnectionType {
 	case side_car.InitConnectionReq_CONNECTION_TYPE_APP_TO_CAR:
 		// for this type we do nothing
+		return nil
 	case side_car.InitConnectionReq_CONNECTION_TYPE_CAR_TO_APP:
 		// for this type we put the connection to the pool
 		return connection.GlobalConnManager().Put(msg.Header.SenderServiceName, conn)
@@ -218,16 +212,16 @@ func (a *proxyAgentImpl) fetchConfig(msg *message.Message) (*message.Message, er
 		return nil, err
 	}
 
-	return message.FromBody(b), nil
+	return message.FromBody(b, nil), nil
 }
 
 func blockRead(source io.Reader, size uint64) ([]byte, error) {
-	var b []byte
+	b := make([]byte, size)
 	var already uint64
 	var inc int
 	var err error
 	for already < size {
-		if inc, err = source.Read(b); err != nil {
+		if inc, err = source.Read(b[already:]); err != nil {
 			return nil, err
 		}
 		already += uint64(inc)

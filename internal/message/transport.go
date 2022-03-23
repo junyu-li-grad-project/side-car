@@ -16,15 +16,23 @@ type Message struct {
 	Body           []byte
 }
 
-func FromProtoMessage(msg proto.Message) *Message {
+func FromProtoMessage(msg proto.Message, header *side_car.Header) *Message {
 	b, _ := proto.Marshal(msg)
-	return FromBody(b)
+	return FromBody(b, header)
 }
 
 // FromBody builds a Message directly with information of the body bytes(build header&headerLength)
-func FromBody(body []byte) *Message {
+func FromBody(body []byte, customHeader *side_car.Header) *Message {
+	if customHeader == nil {
+		customHeader = &side_car.Header{}
+	}
 	header := &side_car.Header{
-		BodySize: uint64(len(body)),
+		BodySize:            uint64(len(body)),
+		MessageType:         customHeader.MessageType,
+		SenderServiceName:   customHeader.SenderServiceName,
+		ReceiverServiceName: customHeader.ReceiverServiceName,
+		TraceId:             customHeader.TraceId,
+		Extra:               customHeader.Extra,
 	}
 	headerBytes, _ := proto.Marshal(header)
 	headerLenBytes := make([]byte, 8)
