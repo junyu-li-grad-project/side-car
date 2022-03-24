@@ -2,30 +2,6 @@ syntax = "proto3";
 package com.github.victor_leee.side_car;
 option go_package = "github.com/victor-leee/side-car";
 
-// Header is attached to every request sent to and from side car proxy
-message Header {
-  // body_size is the total size of body counted in byte
-  uint64 body_size = 1;
-  // RPCMessageReceiverType determines whether the side-car should route the request to config center
-  enum RPCMessageType {
-    // CONFIG_CENTER means the request would be routed to config kv cluster like ETCD
-    CONFIG_CENTER = 0;
-    // SIDE_CAR_PROXY means the request would be routed to another side-car proxy using route table
-    SIDE_CAR_PROXY = 1;
-    // SET_USAGE is bonded with InitConnectionReq to classify the connection usage between apps and side-cars
-    SET_USAGE = 2;
-  }
-  RPCMessageType message_type = 2;
-  // sender_service_name is the service name of the sender (configured in fe, unique globally)
-  string sender_service_name = 3;
-  // receiver_service_name is the service name of the receiver side (can be empty if sent to config center, unique globally)
-  string receiver_service_name = 4;
-  // trace_id is a globally unique id to track the request flow
-  string trace_id = 5;
-  // extra is reserved for context value transfer or any other usage you'd like
-  map <string, string> extra = 99999;
-}
-
 message BaseResponse {
   enum Code {
     CODE_SUCCESS = 0;

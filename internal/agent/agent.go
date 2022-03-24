@@ -4,11 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
+	"github.com/victor-leee/earth"
+	earth_gen "github.com/victor-leee/earth/github.com/victor-leee/earth"
 	"github.com/victor-leee/side-car/internal/config"
-	"github.com/victor-leee/side-car/internal/connection"
-	"github.com/victor-leee/side-car/internal/message"
-	"github.com/victor-leee/side-car/internal/pool"
-	side_car "github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
+	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
 	"google.golang.org/protobuf/proto"
 	"io"
 	"io/ioutil"
@@ -50,10 +49,10 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 		logrus.Errorf("[Init] listen port %d failed: %v", cfg.SideCarPort, err)
 		return nil, err
 	}
-	connection.InitConnManager(func(cname string) (pool.ConnPool, error) {
-		return pool.New(pool.WithFactory(func() (net.Conn, error) {
+	earth.InitConnManager(func(cname string) (earth.ConnPool, error) {
+		return earth.New(earth.WithFactory(func() (net.Conn, error) {
 			return net.Dial("tcp", cname)
-		}), pool.WithInitSize(cfg.InitialPoolSize), pool.WithMaxSize(cfg.MaxPoolSize))
+		}), earth.WithInitSize(cfg.InitialPoolSize), earth.WithMaxSize(cfg.MaxPoolSize))
 	})
 
 	return &proxyAgentImpl{
@@ -104,16 +103,16 @@ func (a *proxyAgentImpl) waitConn(lis net.Listener) {
 
 func (a *proxyAgentImpl) waitMsg(conn net.Conn) {
 	for {
-		msg, err := message.FromReader(conn, blockRead)
+		msg, err := earth.FromReader(conn, blockRead)
 		if err != nil {
-			logrus.Errorf("[waitMsg] read message failed: %v", err)
+			logrus.Errorf("[waitMsg] read earth failed: %v", err)
 			continue
 		}
 		a.handle(msg, conn)
 	}
 }
 
-func (a *proxyAgentImpl) handle(msg *message.Message, conn net.Conn) {
+func (a *proxyAgentImpl) handle(msg *earth.Message, conn net.Conn) {
 	respMsg, err := a.handleRequest(msg, conn)
 	if err != nil {
 		logrus.Errorf("[agent.handle] handleRequest failed: %v", err)
@@ -125,20 +124,20 @@ func (a *proxyAgentImpl) handle(msg *message.Message, conn net.Conn) {
 	}
 }
 
-func (a *proxyAgentImpl) handleRequest(msg *message.Message, conn net.Conn) (*message.Message, error) {
+func (a *proxyAgentImpl) handleRequest(msg *earth.Message, conn net.Conn) (*earth.Message, error) {
 	switch msg.Header.MessageType {
-	case side_car.Header_SIDE_CAR_PROXY:
+	case earth_gen.Header_SIDE_CAR_PROXY:
 		return a.transferToSocket(msg)
-	case side_car.Header_CONFIG_CENTER:
+	case earth_gen.Header_CONFIG_CENTER:
 		return a.fetchConfig(msg)
-	case side_car.Header_SET_USAGE:
+	case earth_gen.Header_SET_USAGE:
 		if err := a.setUsage(msg, conn); err != nil {
-			return message.FromProtoMessage(&side_car.BaseResponse{
+			return earth.FromProtoMessage(&side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
 			}, nil), fmt.Errorf("[agent.handleRequest]: %w", err)
 		}
 
-		return message.FromProtoMessage(&side_car.BaseResponse{
+		return earth.FromProtoMessage(&side_car.BaseResponse{
 			Code: side_car.BaseResponse_CODE_SUCCESS,
 		}, nil), nil
 	default:
@@ -146,12 +145,12 @@ func (a *proxyAgentImpl) handleRequest(msg *message.Message, conn net.Conn) (*me
 	}
 }
 
-func (a *proxyAgentImpl) handleResponse(req *message.Message, conn net.Conn) error {
+func (a *proxyAgentImpl) handleResponse(req *earth.Message, conn net.Conn) error {
 	_, err := req.Write(conn)
 	return err
 }
 
-func (a *proxyAgentImpl) setUsage(msg *message.Message, conn net.Conn) error {
+func (a *proxyAgentImpl) setUsage(msg *earth.Message, conn net.Conn) error {
 	req := &side_car.InitConnectionReq{}
 	if err := proto.Unmarshal(msg.Body, req); err != nil {
 		return fmt.Errorf("[agent.setUsage] unmarshal body failed: %w", err)
@@ -162,7 +161,7 @@ func (a *proxyAgentImpl) setUsage(msg *message.Message, conn net.Conn) error {
 		return nil
 	case side_car.InitConnectionReq_CONNECTION_TYPE_CAR_TO_APP:
 		// for this type we put the connection to the pool
-		return connection.GlobalConnManager().Put(msg.Header.SenderServiceName, conn)
+		return earth.GlobalConnManager().Put(msg.Header.SenderServiceName, conn)
 	}
 
 	return fmt.Errorf("unknown connection type %v", req.ConnectionType)
@@ -171,19 +170,19 @@ func (a *proxyAgentImpl) setUsage(msg *message.Message, conn net.Conn) error {
 // transferToSocket is used in two scenarios
 // the first is that side-car communicates with local apps
 // the second is that side-car communicates with other side-cars
-// both cases the side-car will write message and then block to read a message
-func (a *proxyAgentImpl) transferToSocket(msg *message.Message) (*message.Message, error) {
-	var retMsg *message.Message
+// both cases the side-car will write earth and then block to read a earth
+func (a *proxyAgentImpl) transferToSocket(msg *earth.Message) (*earth.Message, error) {
+	var retMsg *earth.Message
 	var retErr error
-	connection.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
+	earth.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
 		_, retErr = msg.Write(conn)
 		if retErr != nil {
-			logrus.Errorf("[transferToSocket] write message to %v failed: %v", msg.Header.ReceiverServiceName, retErr)
+			logrus.Errorf("[transferToSocket] write earth to %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil
 		}
-		retMsg, retErr = message.FromReader(conn, blockRead)
+		retMsg, retErr = earth.FromReader(conn, blockRead)
 		if retErr != nil {
-			logrus.Errorf("[transferToSocket] read message from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
+			logrus.Errorf("[transferToSocket] read earth from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil
 		}
 
@@ -193,7 +192,7 @@ func (a *proxyAgentImpl) transferToSocket(msg *message.Message) (*message.Messag
 	return retMsg, retErr
 }
 
-func (a *proxyAgentImpl) fetchConfig(msg *message.Message) (*message.Message, error) {
+func (a *proxyAgentImpl) fetchConfig(msg *earth.Message) (*earth.Message, error) {
 	configCenterURL :=
 		fmt.Sprintf("http://%s/v2/keys/%s", a.cfg.ConfigCenterHostname, msg.Header.SenderServiceName)
 	resp, err := http.Get(configCenterURL)
@@ -212,7 +211,7 @@ func (a *proxyAgentImpl) fetchConfig(msg *message.Message) (*message.Message, er
 		return nil, err
 	}
 
-	return message.FromBody(b, nil), nil
+	return earth.FromBody(b, nil), nil
 }
 
 func blockRead(source io.Reader, size uint64) ([]byte, error) {
