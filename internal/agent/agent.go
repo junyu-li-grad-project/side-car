@@ -50,7 +50,7 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 		return nil, err
 	}
 	earth.InitConnManager(func(cname string) (earth.ConnPool, error) {
-		return earth.New(earth.WithFactory(func() (net.Conn, error) {
+		return earth.NewPool(earth.WithFactory(func() (net.Conn, error) {
 			return net.Dial("tcp", cname)
 		}), earth.WithInitSize(cfg.InitialPoolSize), earth.WithMaxSize(cfg.MaxPoolSize))
 	})
