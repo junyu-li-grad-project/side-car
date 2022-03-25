@@ -8,7 +8,6 @@ import (
 	earth_gen "github.com/victor-leee/earth/github.com/victor-leee/earth"
 	"github.com/victor-leee/side-car/internal/config"
 	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"io/ioutil"
 	"net"
@@ -131,7 +130,7 @@ func (a *proxyAgentImpl) handleRequest(msg *earth.Message, conn net.Conn) (*eart
 	case earth_gen.Header_CONFIG_CENTER:
 		return a.fetchConfig(msg)
 	case earth_gen.Header_SET_USAGE:
-		if err := a.setUsage(msg, conn); err != nil {
+		if err := earth.GlobalConnManager().Put(msg.Header.SenderServiceName, conn); err != nil {
 			return earth.FromProtoMessage(&side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
 			}, nil), fmt.Errorf("[agent.handleRequest]: %w", err)
@@ -148,23 +147,6 @@ func (a *proxyAgentImpl) handleRequest(msg *earth.Message, conn net.Conn) (*eart
 func (a *proxyAgentImpl) handleResponse(req *earth.Message, conn net.Conn) error {
 	_, err := req.Write(conn)
 	return err
-}
-
-func (a *proxyAgentImpl) setUsage(msg *earth.Message, conn net.Conn) error {
-	req := &side_car.InitConnectionReq{}
-	if err := proto.Unmarshal(msg.Body, req); err != nil {
-		return fmt.Errorf("[agent.setUsage] unmarshal body failed: %w", err)
-	}
-	switch req.ConnectionType {
-	case side_car.InitConnectionReq_CONNECTION_TYPE_APP_TO_CAR:
-		// for this type we do nothing
-		return nil
-	case side_car.InitConnectionReq_CONNECTION_TYPE_CAR_TO_APP:
-		// for this type we put the connection to the pool
-		return earth.GlobalConnManager().Put(msg.Header.SenderServiceName, conn)
-	}
-
-	return fmt.Errorf("unknown connection type %v", req.ConnectionType)
 }
 
 // transferToSocket is used in two scenarios

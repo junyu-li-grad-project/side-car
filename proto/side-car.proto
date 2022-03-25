@@ -15,15 +15,3 @@ message BaseResponse {
 message GetConfigReq {
   string service_name = 1;
 }
-
-// InitConnectionReq is sent from sdk when connections are established(for each connection)
-// It is meant to make the side car capable to send requests from other side cars to internal apps
-message InitConnectionReq {
-  enum ConnectionType {
-    // APP_TO_CAR means the app sends request and block wait response from the connection
-    CONNECTION_TYPE_APP_TO_CAR = 0;
-    // CAR_TO_APP means the side car sends request and block wait response from the apps
-    CONNECTION_TYPE_CAR_TO_APP = 1;
-  }
-  ConnectionType connection_type = 1;
-}
