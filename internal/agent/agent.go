@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
-	"github.com/victor-leee/earth"
-	earth_gen "github.com/victor-leee/earth/github.com/victor-leee/earth"
+	"github.com/victor-leee/scrpc"
+	scrpc_gen "github.com/victor-leee/scrpc/github.com/victor-leee/scrpc"
 	"github.com/victor-leee/side-car/internal/config"
 	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
 	"io"
@@ -48,10 +48,10 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 		logrus.Errorf("[Init] listen port %d failed: %v", cfg.SideCarPort, err)
 		return nil, err
 	}
-	earth.InitConnManager(func(cname string) (earth.ConnPool, error) {
-		return earth.NewPool(earth.WithFactory(func() (net.Conn, error) {
+	scrpc.InitConnManager(func(cname string) (scrpc.ConnPool, error) {
+		return scrpc.NewPool(scrpc.WithFactory(func() (net.Conn, error) {
 			return net.Dial("tcp", cname)
-		}), earth.WithInitSize(cfg.InitialPoolSize), earth.WithMaxSize(cfg.MaxPoolSize))
+		}), scrpc.WithInitSize(cfg.InitialPoolSize), scrpc.WithMaxSize(cfg.MaxPoolSize))
 	})
 
 	return &proxyAgentImpl{
@@ -102,16 +102,16 @@ func (a *proxyAgentImpl) waitConn(lis net.Listener) {
 
 func (a *proxyAgentImpl) waitMsg(conn net.Conn) {
 	for {
-		msg, err := earth.FromReader(conn, blockRead)
+		msg, err := scrpc.FromReader(conn, blockRead)
 		if err != nil {
-			logrus.Errorf("[waitMsg] read earth failed: %v", err)
+			logrus.Errorf("[waitMsg] read scrpc failed: %v", err)
 			continue
 		}
 		a.handle(msg, conn)
 	}
 }
 
-func (a *proxyAgentImpl) handle(msg *earth.Message, conn net.Conn) {
+func (a *proxyAgentImpl) handle(msg *scrpc.Message, conn net.Conn) {
 	respMsg, err := a.handleRequest(msg, conn)
 	if err != nil {
 		logrus.Errorf("[agent.handle] handleRequest failed: %v", err)
@@ -123,20 +123,20 @@ func (a *proxyAgentImpl) handle(msg *earth.Message, conn net.Conn) {
 	}
 }
 
-func (a *proxyAgentImpl) handleRequest(msg *earth.Message, conn net.Conn) (*earth.Message, error) {
+func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn net.Conn) (*scrpc.Message, error) {
 	switch msg.Header.MessageType {
-	case earth_gen.Header_SIDE_CAR_PROXY:
+	case scrpc_gen.Header_SIDE_CAR_PROXY:
 		return a.transferToSocket(msg)
-	case earth_gen.Header_CONFIG_CENTER:
+	case scrpc_gen.Header_CONFIG_CENTER:
 		return a.fetchConfig(msg)
-	case earth_gen.Header_SET_USAGE:
-		if err := earth.GlobalConnManager().Put(msg.Header.SenderServiceName, conn); err != nil {
-			return earth.FromProtoMessage(&side_car.BaseResponse{
+	case scrpc_gen.Header_SET_USAGE:
+		if err := scrpc.GlobalConnManager().Put(msg.Header.SenderServiceName, conn); err != nil {
+			return scrpc.FromProtoMessage(&side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
 			}, nil), fmt.Errorf("[agent.handleRequest]: %w", err)
 		}
 
-		return earth.FromProtoMessage(&side_car.BaseResponse{
+		return scrpc.FromProtoMessage(&side_car.BaseResponse{
 			Code: side_car.BaseResponse_CODE_SUCCESS,
 		}, nil), nil
 	default:
@@ -144,7 +144,7 @@ func (a *proxyAgentImpl) handleRequest(msg *earth.Message, conn net.Conn) (*eart
 	}
 }
 
-func (a *proxyAgentImpl) handleResponse(req *earth.Message, conn net.Conn) error {
+func (a *proxyAgentImpl) handleResponse(req *scrpc.Message, conn net.Conn) error {
 	_, err := req.Write(conn)
 	return err
 }
@@ -152,19 +152,19 @@ func (a *proxyAgentImpl) handleResponse(req *earth.Message, conn net.Conn) error
 // transferToSocket is used in two scenarios
 // the first is that side-car communicates with local apps
 // the second is that side-car communicates with other side-cars
-// both cases the side-car will write earth and then block to read a earth
-func (a *proxyAgentImpl) transferToSocket(msg *earth.Message) (*earth.Message, error) {
-	var retMsg *earth.Message
+// both cases the side-car will write scrpc and then block to read a scrpc
+func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, error) {
+	var retMsg *scrpc.Message
 	var retErr error
-	earth.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
+	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
 		_, retErr = msg.Write(conn)
 		if retErr != nil {
-			logrus.Errorf("[transferToSocket] write earth to %v failed: %v", msg.Header.ReceiverServiceName, retErr)
+			logrus.Errorf("[transferToSocket] write scrpc to %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil
 		}
-		retMsg, retErr = earth.FromReader(conn, blockRead)
+		retMsg, retErr = scrpc.FromReader(conn, blockRead)
 		if retErr != nil {
-			logrus.Errorf("[transferToSocket] read earth from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
+			logrus.Errorf("[transferToSocket] read scrpc from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil
 		}
 
@@ -174,7 +174,7 @@ func (a *proxyAgentImpl) transferToSocket(msg *earth.Message) (*earth.Message, e
 	return retMsg, retErr
 }
 
-func (a *proxyAgentImpl) fetchConfig(msg *earth.Message) (*earth.Message, error) {
+func (a *proxyAgentImpl) fetchConfig(msg *scrpc.Message) (*scrpc.Message, error) {
 	configCenterURL :=
 		fmt.Sprintf("http://%s/v2/keys/%s", a.cfg.ConfigCenterHostname, msg.Header.SenderServiceName)
 	resp, err := http.Get(configCenterURL)
@@ -193,7 +193,7 @@ func (a *proxyAgentImpl) fetchConfig(msg *earth.Message) (*earth.Message, error)
 		return nil, err
 	}
 
-	return earth.FromBody(b, nil), nil
+	return scrpc.FromBody(b, nil), nil
 }
 
 func blockRead(source io.Reader, size uint64) ([]byte, error) {
