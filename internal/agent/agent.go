@@ -48,10 +48,11 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 		logrus.Errorf("[Init] listen port %d failed: %v", cfg.SideCarPort, err)
 		return nil, err
 	}
+	// TODO switch to cfg.xxxSize
 	scrpc.InitConnManager(func(cname string) (scrpc.ConnPool, error) {
 		return scrpc.NewPool(scrpc.WithFactory(func() (net.Conn, error) {
-			return net.Dial("tcp", cname)
-		}), scrpc.WithInitSize(cfg.InitialPoolSize), scrpc.WithMaxSize(cfg.MaxPoolSize))
+			return net.Dial("tcp", fmt.Sprintf("%s:%d", cname, cfg.SideCarPort))
+		}), scrpc.WithInitSize(10), scrpc.WithMaxSize(50))
 	})
 
 	return &proxyAgentImpl{
@@ -80,13 +81,14 @@ func (a *proxyAgentImpl) WaitTermination(beforeCleanup, postCleanup Hook) error 
 }
 
 func (a *proxyAgentImpl) Start() {
-	go a.waitConn(a.localLis)
-	go a.waitConn(a.remoteLis)
+	go a.waitConn(a.localLis, "local")
+	go a.waitConn(a.remoteLis, "remote")
 }
 
-func (a *proxyAgentImpl) waitConn(lis net.Listener) {
+func (a *proxyAgentImpl) waitConn(lis net.Listener, connType string) {
 	for {
 		conn, err := lis.Accept()
+		logrus.Infof("new conn from %s", connType)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				logrus.Warnf("the socket %v has been closed, please check if it's as expected", lis.Addr())
@@ -96,18 +98,24 @@ func (a *proxyAgentImpl) waitConn(lis net.Listener) {
 			logrus.Errorf("[waitConn] accept conn failed: %v", err)
 			continue
 		}
-		go a.waitMsg(conn)
+		go a.waitMsg(conn, connType)
 	}
 }
 
-func (a *proxyAgentImpl) waitMsg(conn net.Conn) {
+func (a *proxyAgentImpl) waitMsg(conn net.Conn, connType string) {
 	for {
+		logrus.Infof("new msg from %s", connType)
 		msg, err := scrpc.FromReader(conn, blockRead)
+		logrus.Infof("%+v", msg)
 		if err != nil {
 			logrus.Errorf("[waitMsg] read scrpc failed: %v", err)
-			continue
+			break
 		}
 		a.handle(msg, conn)
+		if msg.Header.MessageType == scrpc_gen.Header_SET_USAGE {
+			logrus.Info("exit block read because it's side-car to app connection")
+			break
+		}
 	}
 }
 
@@ -130,15 +138,18 @@ func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn net.Conn) (*scrp
 	case scrpc_gen.Header_CONFIG_CENTER:
 		return a.fetchConfig(msg)
 	case scrpc_gen.Header_SET_USAGE:
+		header := &scrpc_gen.Header{
+			ReceiverMethodName: "__ack_set_usage",
+		}
 		if err := scrpc.GlobalConnManager().Put(msg.Header.SenderServiceName, conn); err != nil {
 			return scrpc.FromProtoMessage(&side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
-			}, nil), fmt.Errorf("[agent.handleRequest]: %w", err)
+			}, header), fmt.Errorf("[agent.handleRequest]: %w", err)
 		}
 
 		return scrpc.FromProtoMessage(&side_car.BaseResponse{
 			Code: side_car.BaseResponse_CODE_SUCCESS,
-		}, nil), nil
+		}, header), nil
 	default:
 		return nil, errors.New("[handleRequest] unknown receiver type")
 	}
@@ -157,12 +168,16 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 	var retMsg *scrpc.Message
 	var retErr error
 	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
+		logrus.Infof("transfer to %s", msg.Header.ReceiverServiceName)
 		_, retErr = msg.Write(conn)
+		logrus.Infof("transfer done, err:%v", retErr)
 		if retErr != nil {
 			logrus.Errorf("[transferToSocket] write scrpc to %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil
 		}
+		logrus.Info("now block read")
 		retMsg, retErr = scrpc.FromReader(conn, blockRead)
+		logrus.Infof("received response: %+v", retMsg)
 		if retErr != nil {
 			logrus.Errorf("[transferToSocket] read scrpc from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil

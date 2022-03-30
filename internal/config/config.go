@@ -19,7 +19,7 @@ func Init() (*Config, error) {
 	var sockPath, ccHostname string
 	var sideCarPort uint
 	flag.StringVar(&sockPath, "sock", "/tmp/sc.sock", "specify the sock path")
-	flag.UintVar(&sideCarPort, "port", 56789, "specify the side-car port")
+	flag.UintVar(&sideCarPort, "port", 80, "specify the side-car port")
 	flag.StringVar(&ccHostname, "cc", "cc", "specify config center host name")
 	flag.Parse()
 	cfg := &Config{
