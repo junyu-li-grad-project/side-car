@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
@@ -8,10 +9,8 @@ import (
 	scrpc_gen "github.com/victor-leee/scrpc/github.com/victor-leee/scrpc"
 	"github.com/victor-leee/side-car/internal/config"
 	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
+	"google.golang.org/protobuf/proto"
 	"io"
-	"io/ioutil"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -29,29 +28,28 @@ type ProxyAgent interface {
 
 type proxyAgentImpl struct {
 	// localLis is used to receive data from other containers within the same pod
-	localLis net.Listener
+	localLis *scrpc.Listener
 	// remoteLis is used to receive data from other side-car proxy
-	remoteLis net.Listener
+	remoteLis *scrpc.Listener
 	// cfg is local config
 	cfg *config.Config
 }
 
 func Init(cfg *config.Config) (ProxyAgent, error) {
 	path := cfg.SockPath
-	localLis, err := net.Listen("unix", path)
+	localLis, err := scrpc.Listen("unix", path)
 	if err != nil {
 		logrus.Errorf("[Init] listen local agent failed: %v", err)
 		return nil, err
 	}
-	remoteLis, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.SideCarPort))
+	remoteLis, err := scrpc.Listen("tcp", fmt.Sprintf(":%d", cfg.SideCarPort))
 	if err != nil {
 		logrus.Errorf("[Init] listen port %d failed: %v", cfg.SideCarPort, err)
 		return nil, err
 	}
-	// TODO switch to cfg.xxxSize
 	scrpc.InitConnManager(func(cname string) (scrpc.ConnPool, error) {
-		return scrpc.NewPool(scrpc.WithFactory(func() (net.Conn, error) {
-			return net.Dial("tcp", fmt.Sprintf("%s:%d", cname, cfg.SideCarPort))
+		return scrpc.NewPool(scrpc.WithFactory(func() (*scrpc.Conn, error) {
+			return scrpc.Dial("tcp", fmt.Sprintf("%s:%d", cname, cfg.SideCarPort))
 		}), scrpc.WithInitSize(10), scrpc.WithMaxSize(50))
 	})
 
@@ -81,30 +79,23 @@ func (a *proxyAgentImpl) WaitTermination(beforeCleanup, postCleanup Hook) error 
 }
 
 func (a *proxyAgentImpl) Start() {
-	go a.waitConn(a.localLis, "local")
-	go a.waitConn(a.remoteLis, "remote")
+	go a.waitConn(a.localLis)
+	go a.waitConn(a.remoteLis)
 }
 
-func (a *proxyAgentImpl) waitConn(lis net.Listener, connType string) {
+func (a *proxyAgentImpl) waitConn(lis *scrpc.Listener) {
 	for {
 		conn, err := lis.Accept()
-		logrus.Infof("new conn from %s", connType)
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
-				logrus.Warnf("the socket %v has been closed, please check if it's as expected", lis.Addr())
-				// so the sock has been closed, no more conn we exit !
-				break
-			}
 			logrus.Errorf("[waitConn] accept conn failed: %v", err)
 			continue
 		}
-		go a.waitMsg(conn, connType)
+		go a.waitMsg(conn)
 	}
 }
 
-func (a *proxyAgentImpl) waitMsg(conn net.Conn, connType string) {
+func (a *proxyAgentImpl) waitMsg(conn *scrpc.Conn) {
 	for {
-		logrus.Infof("new msg from %s", connType)
 		msg, err := scrpc.FromReader(conn, blockRead)
 		logrus.Infof("%+v", msg)
 		if err != nil {
@@ -119,7 +110,7 @@ func (a *proxyAgentImpl) waitMsg(conn net.Conn, connType string) {
 	}
 }
 
-func (a *proxyAgentImpl) handle(msg *scrpc.Message, conn net.Conn) {
+func (a *proxyAgentImpl) handle(msg *scrpc.Message, conn *scrpc.Conn) {
 	respMsg, err := a.handleRequest(msg, conn)
 	if err != nil {
 		logrus.Errorf("[agent.handle] handleRequest failed: %v", err)
@@ -131,11 +122,13 @@ func (a *proxyAgentImpl) handle(msg *scrpc.Message, conn net.Conn) {
 	}
 }
 
-func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn net.Conn) (*scrpc.Message, error) {
+func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn *scrpc.Conn) (*scrpc.Message, error) {
 	switch msg.Header.MessageType {
 	case scrpc_gen.Header_SIDE_CAR_PROXY:
 		return a.transferToSocket(msg)
 	case scrpc_gen.Header_CONFIG_CENTER:
+		// TODO can create a standalone service to interact with etcd
+		// so that the function CONFIG_CENTER can be merged to SIDE_CAR_PROXY
 		return a.fetchConfig(msg)
 	case scrpc_gen.Header_SET_USAGE:
 		header := &scrpc_gen.Header{
@@ -155,7 +148,7 @@ func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn net.Conn) (*scrp
 	}
 }
 
-func (a *proxyAgentImpl) handleResponse(req *scrpc.Message, conn net.Conn) error {
+func (a *proxyAgentImpl) handleResponse(req *scrpc.Message, conn *scrpc.Conn) error {
 	_, err := req.Write(conn)
 	return err
 }
@@ -167,7 +160,7 @@ func (a *proxyAgentImpl) handleResponse(req *scrpc.Message, conn net.Conn) error
 func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, error) {
 	var retMsg *scrpc.Message
 	var retErr error
-	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn net.Conn) error {
+	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn *scrpc.Conn) error {
 		logrus.Infof("transfer to %s", msg.Header.ReceiverServiceName)
 		_, retErr = msg.Write(conn)
 		logrus.Infof("transfer done, err:%v", retErr)
@@ -190,25 +183,26 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 }
 
 func (a *proxyAgentImpl) fetchConfig(msg *scrpc.Message) (*scrpc.Message, error) {
-	configCenterURL :=
-		fmt.Sprintf("http://%s/v2/keys/%s", a.cfg.ConfigCenterHostname, msg.Header.SenderServiceName)
-	resp, err := http.Get(configCenterURL)
-	if err != nil {
-		logrus.Errorf("fetch config failed: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ETCDGetTimeout())
+	defer cancel()
+	fetchConfigReq := &side_car.GetConfigReq{}
+	if err := proto.Unmarshal(msg.Body, fetchConfigReq); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err = resp.Body.Close(); err != nil {
-			logrus.Errorf("fetch config close body failed: %v", err)
-		}
-	}()
-	b, err := ioutil.ReadAll(resp.Body)
+	resp, err := config.Get(ctx, config.Key(msg.Header.SenderServiceName, fetchConfigReq.Key))
 	if err != nil {
-		logrus.Errorf("fetch config read body failed: %v", err)
 		return nil, err
+	}
+	keyExists := resp.Count > 0
+	value := ""
+	if keyExists {
+		value = string(resp.Kvs[0].Value)
 	}
 
-	return scrpc.FromBody(b, nil), nil
+	return scrpc.FromProtoMessage(&side_car.GetConfigResponse{
+		Exist: keyExists,
+		Value: value,
+	}, nil), nil
 }
 
 func blockRead(source io.Reader, size uint64) ([]byte, error) {

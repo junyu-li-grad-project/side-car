@@ -2,20 +2,24 @@ package main
 
 import (
 	"github.com/sirupsen/logrus"
+	"github.com/victor-leee/scrpc"
 	"github.com/victor-leee/side-car/internal/agent"
 	"github.com/victor-leee/side-car/internal/config"
 	"os"
 )
 
 func main() {
-	os.Remove("/tmp/sc.sock")
-	logrus.Info("into side-car")
+	os.Remove(scrpc.GetConfig().LocalTransportConfig.Path)
 	cfg, err := config.Init()
 	if err != nil {
 		fail(err)
 	}
 	logrus.Info("config init done")
 
+	if err = config.InitETCD(cfg); err != nil {
+		fail(err)
+	}
+	logrus.Info("etcd init done")
 	agt, err := agent.Init(cfg)
 	if err != nil {
 		fail(err)
