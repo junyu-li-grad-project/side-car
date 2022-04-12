@@ -10,17 +10,3 @@ message BaseResponse {
   Code code = 1;
   string message = 2;
 }
-
-// GetConfigReq is used to fetch config data from config center
-// This is a single operation
-// the final key is formatted as service_name/key
-message GetConfigReq {
-  string key = 1;
-}
-
-// GetConfigResponse is used to represent a fetch config response object
-// currently the value is only in json format
-message GetConfigResponse {
-  bool exist = 1;
-  string value = 2;
-}
