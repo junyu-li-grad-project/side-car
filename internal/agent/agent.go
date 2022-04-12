@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
@@ -9,7 +8,6 @@ import (
 	scrpc_gen "github.com/victor-leee/scrpc/github.com/victor-leee/scrpc"
 	"github.com/victor-leee/side-car/internal/config"
 	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
-	"google.golang.org/protobuf/proto"
 	"io"
 	"os"
 	"os/signal"
@@ -126,10 +124,6 @@ func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn *scrpc.Conn) (*s
 	switch msg.Header.MessageType {
 	case scrpc_gen.Header_SIDE_CAR_PROXY:
 		return a.transferToSocket(msg)
-	case scrpc_gen.Header_CONFIG_CENTER:
-		// TODO can create a standalone service to interact with etcd
-		// so that the function CONFIG_CENTER can be merged to SIDE_CAR_PROXY
-		return a.fetchConfig(msg)
 	case scrpc_gen.Header_SET_USAGE:
 		header := &scrpc_gen.Header{
 			ReceiverMethodName: "__ack_set_usage",
@@ -180,29 +174,6 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 	})
 
 	return retMsg, retErr
-}
-
-func (a *proxyAgentImpl) fetchConfig(msg *scrpc.Message) (*scrpc.Message, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ETCDGetTimeout())
-	defer cancel()
-	fetchConfigReq := &side_car.GetConfigReq{}
-	if err := proto.Unmarshal(msg.Body, fetchConfigReq); err != nil {
-		return nil, err
-	}
-	resp, err := config.Get(ctx, config.Key(msg.Header.SenderServiceName, fetchConfigReq.Key))
-	if err != nil {
-		return nil, err
-	}
-	keyExists := resp.Count > 0
-	value := ""
-	if keyExists {
-		value = string(resp.Kvs[0].Value)
-	}
-
-	return scrpc.FromProtoMessage(&side_car.GetConfigResponse{
-		Exist: keyExists,
-		Value: value,
-	}, nil), nil
 }
 
 func blockRead(source io.Reader, size uint64) ([]byte, error) {
