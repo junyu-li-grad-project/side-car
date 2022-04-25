@@ -3,6 +3,8 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"github.com/alibaba/sentinel-golang/api"
+	"github.com/alibaba/sentinel-golang/core/base"
 	"github.com/sirupsen/logrus"
 	"github.com/victor-leee/scrpc"
 	scrpc_gen "github.com/victor-leee/scrpc/github.com/victor-leee/scrpc"
@@ -155,6 +157,21 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 	var retMsg *scrpc.Message
 	var retErr error
 	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn *scrpc.Conn) error {
+		var e *base.SentinelEntry
+		var b error
+		if conn.Type == scrpc.ConnTypeSideCar2Local {
+			// if this message is transferred between side-car and local service
+			// then we can throttle based on {sender.receiver.receiver_method}
+			header := msg.Header
+			throttleKey := header.SenderServiceName + "." + header.ReceiverServiceName + "." + header.ReceiverMethodName
+			e, b = api.Entry(throttleKey, api.WithTrafficType(base.Inbound))
+			if b != nil {
+				retMsg = scrpc.FromBody(nil, &scrpc_gen.Header{
+					MessageType: scrpc_gen.Header_THROTTLED,
+				})
+				return nil
+			}
+		}
 		logrus.Infof("transfer to %s", msg.Header.ReceiverServiceName)
 		_, retErr = msg.Write(conn)
 		logrus.Infof("transfer done, err:%v", retErr)
@@ -168,6 +185,10 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 		if retErr != nil {
 			logrus.Errorf("[transferToSocket] read scrpc from %v failed: %v", msg.Header.ReceiverServiceName, retErr)
 			return nil
+		}
+		if e != nil {
+			logrus.Info("throttle pass")
+			e.Exit()
 		}
 
 		return nil

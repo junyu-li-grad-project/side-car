@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/alibaba/sentinel-golang/api"
 	"github.com/sirupsen/logrus"
 	"github.com/victor-leee/scrpc"
 	"github.com/victor-leee/side-car/internal/agent"
@@ -9,7 +10,9 @@ import (
 )
 
 func main() {
-	os.Remove(scrpc.GetConfig().LocalTransportConfig.Path)
+	if err := os.Remove(scrpc.GetConfig().LocalTransportConfig.Path); err != nil {
+		logrus.Warnf("delete legacy socket file failed: %v", err)
+	}
 	cfg, err := config.Init()
 	if err != nil {
 		fail(err)
@@ -20,6 +23,13 @@ func main() {
 		fail(err)
 	}
 	logrus.Info("etcd init done")
+
+	// Throttling initialization start
+	if err = api.InitDefault(); err != nil {
+		fail(err)
+	}
+	// Throttling initialization done
+
 	agt, err := agent.Init(cfg)
 	if err != nil {
 		fail(err)
