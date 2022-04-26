@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,6 +20,7 @@ const (
 	EnvInitialPoolSize  = "SC_POOL_INIT_SIZE"
 	EnvMaxPoolSize      = "SC_POOL_MAX_SIZE"
 	EnvServiceName      = "SC_SERVICE_NAME"
+	EnvServiceKey       = "SC_SERVICE_KEY"
 )
 
 type Config struct {
@@ -58,10 +58,11 @@ func Init() (*Config, error) {
 		InitialPoolSize:  envInt[int](EnvInitialPoolSize, 10),
 		MaxPoolSize:      envInt[int](EnvMaxPoolSize, 50),
 		ServiceID:        envStr(EnvServiceName, ""),
+		ServiceKey:       envStr(EnvServiceKey, ""),
 	}
-	if len(cfg.ServiceID) == 0 {
-		return nil, errors.New("the service name is not specified")
-	}
+	//if len(cfg.ServiceID) == 0 {
+	//	return nil, errors.New("the service name is not specified")
+	//}
 
 	return cfg, nil
 }

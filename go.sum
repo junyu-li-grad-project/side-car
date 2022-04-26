@@ -317,6 +317,8 @@ github.com/victor-leee/scrpc v0.0.0-20220425090410-2cfb72be795d h1:kXO++JsUgt3lq
 github.com/victor-leee/scrpc v0.0.0-20220425090410-2cfb72be795d/go.mod h1:Wr1pytft+IW8kbh0JiIqlQzvaDDMYPMI6aHbRXZSGu0=
 github.com/victor-leee/scrpc v0.0.0-20220425090807-1a81e1835101 h1:VziiASX0LTSJ2VJaqktPlMonfAOzoczZfMn+8mPCOjs=
 github.com/victor-leee/scrpc v0.0.0-20220425090807-1a81e1835101/go.mod h1:Wr1pytft+IW8kbh0JiIqlQzvaDDMYPMI6aHbRXZSGu0=
+github.com/victor-leee/scrpc v0.0.0-20220426140636-43e8d68ff575 h1:GERvpgLrxSjVvJ3B6SnoMj1XVhGybasYF5PQvcBixQk=
+github.com/victor-leee/scrpc v0.0.0-20220426140636-43e8d68ff575/go.mod h1:Wr1pytft+IW8kbh0JiIqlQzvaDDMYPMI6aHbRXZSGu0=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2/go.mod h1:UETIi67q53MR2AWcXfiuqkDkRtnGDLqkBTpCHuJHxtU=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=

@@ -15,6 +15,7 @@ import (
 	"github.com/victor-leee/side-car/internal/config"
 	config_backend "github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/config-backend"
 	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
+	"go.uber.org/atomic"
 	"io"
 	"os"
 	"os/signal"
@@ -42,11 +43,16 @@ type proxyAgentImpl struct {
 	cfg *config.Config
 	// configService is the interface for operating dynamic configurations
 	configService config_backend.ConfigBackendService
+	// connManager is the controller for connection pool generation
+	connManager scrpc.Manager
+	// canTransferLoopMessage is used only in config-backend side-car, which indicates if it's ok to send message to app
+	canTransferLoopMessage atomic.Bool
 }
 
 type flowControlRules struct {
 	Direction     config.FlowDirection `json:"direction"`
 	TargetService string               `json:"target_service"`
+	TargetMethod  string               `json:"target_method"`
 	QPS           uint64               `json:"qps"`
 }
 
@@ -62,17 +68,17 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 		logrus.Errorf("[Init] listen port %d failed: %v", cfg.SideCarPort, err)
 		return nil, err
 	}
-	scrpc.InitConnManager(func(cname string) (scrpc.ConnPool, error) {
-		return scrpc.NewPool(scrpc.WithFactory(func() (*scrpc.Conn, error) {
-			return scrpc.Dial("tcp", fmt.Sprintf("%s:%d", cname, cfg.SideCarPort))
-		}), scrpc.WithInitSize(10), scrpc.WithMaxSize(50))
-	})
 
 	return &proxyAgentImpl{
 		localLis:      localLis,
 		remoteLis:     remoteLis,
 		cfg:           cfg,
 		configService: &config_backend.ConfigBackendServiceImpl{},
+		connManager: scrpc.InitConnManager(func(cname string) (scrpc.ConnPool, error) {
+			return scrpc.NewPool(scrpc.WithFactory(func() (*scrpc.Conn, error) {
+				return scrpc.Dial("tcp", fmt.Sprintf("%s:%d", cname, cfg.SideCarPort))
+			}), scrpc.WithInitSize(10), scrpc.WithMaxSize(50))
+		}),
 	}, nil
 }
 
@@ -102,9 +108,12 @@ func (a *proxyAgentImpl) Start() {
 
 func (a *proxyAgentImpl) refreshFlowControlRules() {
 	interval := time.Second
-	timer := time.NewTimer(interval)
+	ticker := time.NewTicker(interval)
+	for !a.canTransferLoopMessage.Load() {
+		time.Sleep(time.Second)
+	}
 	for {
-		<-timer.C
+		<-ticker.C
 		ctx, cancel := context.WithTimeout(context.Background(), interval)
 		configReq := &config_backend.GetConfigRequest{
 			ServiceId:  a.cfg.ServiceID,
@@ -123,17 +132,19 @@ func (a *proxyAgentImpl) refreshFlowControlRules() {
 		}
 		sentinelRules := make([]*flow.Rule, 0, len(rules))
 		for _, r := range rules {
+			logrus.Infof("%+v", r)
 			if r.Direction != config.Inbound && r.Direction != config.Outbound {
 				logrus.Errorf("invalid flow direction:%v", r.Direction)
 				continue
 			}
 			sentinelRules = append(sentinelRules, &flow.Rule{
-				Resource:               a.buildFlowResourceName(r.Direction, a.cfg.ServiceID, r.TargetService),
+				Resource:               a.buildFlowResourceName(r.Direction, r.TargetService, a.cfg.ServiceID, r.TargetMethod),
 				TokenCalculateStrategy: flow.Direct,
 				ControlBehavior:        flow.Reject,
 				Threshold:              float64(r.QPS),
 			})
 		}
+		logrus.Infof("resourceID:%s", sentinelRules[0].Resource)
 		ok, err := flow.LoadRules(sentinelRules)
 		if err != nil {
 			logrus.Errorf("load rules to sentinel failed: %v", err)
@@ -146,8 +157,8 @@ func (a *proxyAgentImpl) refreshFlowControlRules() {
 	}
 }
 
-func (a *proxyAgentImpl) buildFlowResourceName(flowDir config.FlowDirection, from, to string) string {
-	return strings.Join([]string{from, to, string(flowDir)}, ".")
+func (a *proxyAgentImpl) buildFlowResourceName(flowDir config.FlowDirection, from, to, toMethod string) string {
+	return strings.Join([]string{from, to, toMethod, string(flowDir)}, ".")
 }
 
 func (a *proxyAgentImpl) waitConn(lis *scrpc.Listener) {
@@ -197,12 +208,13 @@ func (a *proxyAgentImpl) handleRequest(msg *scrpc.Message, conn *scrpc.Conn) (*s
 		header := &scrpc_gen.Header{
 			ReceiverMethodName: "__ack_set_usage",
 		}
-		if err := scrpc.GlobalConnManager().Put(msg.Header.SenderServiceName, conn); err != nil {
+		if err := a.connManager.Put(msg.Header.SenderServiceName, conn); err != nil {
 			return scrpc.FromProtoMessage(&side_car.BaseResponse{
 				Code: side_car.BaseResponse_CODE_ERROR,
 			}, header), fmt.Errorf("[agent.handleRequest]: %w", err)
 		}
 
+		a.canTransferLoopMessage.Swap(true)
 		return scrpc.FromProtoMessage(&side_car.BaseResponse{
 			Code: side_car.BaseResponse_CODE_SUCCESS,
 		}, header), nil
@@ -223,21 +235,25 @@ func (a *proxyAgentImpl) handleResponse(req *scrpc.Message, conn *scrpc.Conn) er
 func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, error) {
 	var retMsg *scrpc.Message
 	var retErr error
-	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn *scrpc.Conn) error {
+	a.connManager.Func(msg.Header.ReceiverServiceName, func(conn *scrpc.Conn) error {
 		// ------ throttling start
 		var (
 			e           *base.SentinelEntry
-			b           error
+			b           *base.BlockError
 			throttleKey string
 		)
 		if conn.Type == scrpc.ConnTypeSideCar2Local {
-			throttleKey = a.buildFlowResourceName(config.Inbound, msg.Header.SenderServiceName, msg.Header.ReceiverServiceName)
+			throttleKey = a.buildFlowResourceName(config.Inbound, msg.Header.SenderServiceName, msg.Header.ReceiverServiceName, msg.Header.ReceiverMethodName)
+			logrus.Infof("throttle key:%s", throttleKey)
 		} else {
-			throttleKey = a.buildFlowResourceName(config.Outbound, msg.Header.SenderServiceName, msg.Header.ReceiverServiceName)
+			throttleKey = a.buildFlowResourceName(config.Outbound, msg.Header.SenderServiceName, msg.Header.ReceiverServiceName, msg.Header.ReceiverMethodName)
 		}
 		e, b = api.Entry(throttleKey, api.WithTrafficType(base.Inbound))
 		if b != nil {
-			logrus.Info("throttled")
+			logrus.Info(b.BlockType())
+			logrus.Infof(b.BlockMsg())
+			logrus.Info(b.TriggeredRule())
+			logrus.Info(b.TriggeredValue())
 			retMsg = scrpc.FromBody(nil, &scrpc_gen.Header{
 				MessageType: scrpc_gen.Header_THROTTLED,
 			})

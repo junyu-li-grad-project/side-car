@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/alibaba/sentinel-golang v1.0.4
 	github.com/sirupsen/logrus v1.8.1
-	github.com/victor-leee/scrpc v0.0.0-20220425090807-1a81e1835101
+	github.com/victor-leee/scrpc v0.0.0-20220426140636-43e8d68ff575
 	go.etcd.io/etcd/client/v3 v3.5.2
 	google.golang.org/protobuf v1.28.0
 )
