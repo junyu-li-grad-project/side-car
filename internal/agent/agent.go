@@ -52,12 +52,12 @@ type flowControlRules struct {
 
 func Init(cfg *config.Config) (ProxyAgent, error) {
 	path := cfg.SockPath
-	localLis, err := scrpc.Listen("unix", path)
+	localLis, err := scrpc.Listen("unix", path, scrpc.WithListenerType(scrpc.ConnTypeSideCar2Local))
 	if err != nil {
 		logrus.Errorf("[Init] listen local agent failed: %v", err)
 		return nil, err
 	}
-	remoteLis, err := scrpc.Listen("tcp", fmt.Sprintf(":%d", cfg.SideCarPort))
+	remoteLis, err := scrpc.Listen("tcp", fmt.Sprintf(":%d", cfg.SideCarPort), scrpc.WithListenerType(scrpc.ConnTypeSideCar2SideCar))
 	if err != nil {
 		logrus.Errorf("[Init] listen port %d failed: %v", cfg.SideCarPort, err)
 		return nil, err
@@ -224,22 +224,27 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 	var retMsg *scrpc.Message
 	var retErr error
 	scrpc.GlobalConnManager().Func(msg.Header.ReceiverServiceName, func(conn *scrpc.Conn) error {
-		var e *base.SentinelEntry
-		var b error
+		// ------ throttling start
+		var (
+			e           *base.SentinelEntry
+			b           error
+			throttleKey string
+		)
 		if conn.Type == scrpc.ConnTypeSideCar2Local {
-			// if this message is transferred between side-car and local service
-			// then we can throttle based on {sender.receiver.receiver_method}
-			header := msg.Header
-			throttleKey := header.SenderServiceName + "." + header.ReceiverServiceName + "." + header.ReceiverMethodName
-			e, b = api.Entry(throttleKey, api.WithTrafficType(base.Inbound))
-			if b != nil {
-				logrus.Info("throttled")
-				retMsg = scrpc.FromBody(nil, &scrpc_gen.Header{
-					MessageType: scrpc_gen.Header_THROTTLED,
-				})
-				return nil
-			}
+			throttleKey = a.buildFlowResourceName(config.Inbound, msg.Header.SenderServiceName, msg.Header.ReceiverServiceName)
+		} else {
+			throttleKey = a.buildFlowResourceName(config.Outbound, msg.Header.SenderServiceName, msg.Header.ReceiverServiceName)
 		}
+		e, b = api.Entry(throttleKey, api.WithTrafficType(base.Inbound))
+		if b != nil {
+			logrus.Info("throttled")
+			retMsg = scrpc.FromBody(nil, &scrpc_gen.Header{
+				MessageType: scrpc_gen.Header_THROTTLED,
+			})
+			return nil
+		}
+		// ------ throttling end
+
 		logrus.Infof("transfer to %s", msg.Header.ReceiverServiceName)
 		_, retErr = msg.Write(conn)
 		logrus.Infof("transfer done, err:%v", retErr)
