@@ -1,0 +1,41 @@
+syntax = "proto3";
+package config_backend.victor_leee.github.com;
+option go_package = "github.com/victor-leee/config-backend";
+
+enum ErrorCode {
+  SUCCESS = 0;
+  ERR_INVALID_SERVICE_ID = 1;
+  ERR_INVALID_SERVICE_KEY = 2;
+  ERR_INTERNAL_SERVER_ERROR = 999;
+}
+
+message BaseResponse {
+  ErrorCode err_code = 1;
+  string err_msg = 2;
+}
+
+message GetConfigRequest {
+  string service_id = 1;
+  string service_key = 2;
+  string key = 3;
+}
+message GetConfigResponse {
+  BaseResponse base_response = 1;
+  bool key_exist = 2;
+  string value = 3;
+}
+
+message PutConfigRequest {
+  string service_id = 1;
+  string service_key = 2;
+  string key = 3;
+  string value = 4;
+}
+message PutConfigResponse {
+  BaseResponse base_response = 1;
+}
+
+service ConfigBackendService {
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
+  rpc PutConfig(PutConfigRequest) returns (PutConfigResponse) {}
+}

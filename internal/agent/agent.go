@@ -1,19 +1,26 @@
 package agent
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/alibaba/sentinel-golang/api"
 	"github.com/alibaba/sentinel-golang/core/base"
+	"github.com/alibaba/sentinel-golang/core/flow"
 	"github.com/sirupsen/logrus"
 	"github.com/victor-leee/scrpc"
 	scrpc_gen "github.com/victor-leee/scrpc/github.com/victor-leee/scrpc"
 	"github.com/victor-leee/side-car/internal/config"
+	config_backend "github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/config-backend"
 	"github.com/victor-leee/side-car/proto/gen/github.com/victor-leee/side-car"
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 )
 
 type Hook func()
@@ -33,6 +40,14 @@ type proxyAgentImpl struct {
 	remoteLis *scrpc.Listener
 	// cfg is local config
 	cfg *config.Config
+	// configService is the interface for operating dynamic configurations
+	configService config_backend.ConfigBackendService
+}
+
+type flowControlRules struct {
+	Direction     config.FlowDirection `json:"direction"`
+	TargetService string               `json:"target_service"`
+	QPS           uint64               `json:"qps"`
 }
 
 func Init(cfg *config.Config) (ProxyAgent, error) {
@@ -54,9 +69,10 @@ func Init(cfg *config.Config) (ProxyAgent, error) {
 	})
 
 	return &proxyAgentImpl{
-		localLis:  localLis,
-		remoteLis: remoteLis,
-		cfg:       cfg,
+		localLis:      localLis,
+		remoteLis:     remoteLis,
+		cfg:           cfg,
+		configService: &config_backend.ConfigBackendServiceImpl{},
 	}, nil
 }
 
@@ -81,6 +97,57 @@ func (a *proxyAgentImpl) WaitTermination(beforeCleanup, postCleanup Hook) error 
 func (a *proxyAgentImpl) Start() {
 	go a.waitConn(a.localLis)
 	go a.waitConn(a.remoteLis)
+	go a.refreshFlowControlRules()
+}
+
+func (a *proxyAgentImpl) refreshFlowControlRules() {
+	interval := time.Second
+	timer := time.NewTimer(interval)
+	for {
+		<-timer.C
+		ctx, cancel := context.WithTimeout(context.Background(), interval)
+		configReq := &config_backend.GetConfigRequest{
+			ServiceId:  a.cfg.ServiceID,
+			ServiceKey: a.cfg.ServiceKey,
+			Key:        config.FlowControlKey,
+		}
+		resp, err := a.configService.GetConfig(ctx, configReq)
+		if err != nil {
+			logrus.Errorf("failed to fetch flow control config:%v", err)
+			continue
+		}
+		var rules []*flowControlRules
+		if err = json.NewDecoder(bytes.NewReader([]byte(resp.Value))).Decode(&rules); err != nil {
+			logrus.Errorf("decode flow control rules failed: %v", err)
+			continue
+		}
+		sentinelRules := make([]*flow.Rule, 0, len(rules))
+		for _, r := range rules {
+			if r.Direction != config.Inbound && r.Direction != config.Outbound {
+				logrus.Errorf("invalid flow direction:%v", r.Direction)
+				continue
+			}
+			sentinelRules = append(sentinelRules, &flow.Rule{
+				Resource:               a.buildFlowResourceName(r.Direction, a.cfg.ServiceID, r.TargetService),
+				TokenCalculateStrategy: flow.Direct,
+				ControlBehavior:        flow.Reject,
+				Threshold:              float64(r.QPS),
+			})
+		}
+		ok, err := flow.LoadRules(sentinelRules)
+		if err != nil {
+			logrus.Errorf("load rules to sentinel failed: %v", err)
+			continue
+		}
+		if !ok {
+			logrus.Warn("seems no config changed")
+		}
+		cancel()
+	}
+}
+
+func (a *proxyAgentImpl) buildFlowResourceName(flowDir config.FlowDirection, from, to string) string {
+	return strings.Join([]string{from, to, string(flowDir)}, ".")
 }
 
 func (a *proxyAgentImpl) waitConn(lis *scrpc.Listener) {
@@ -166,6 +233,7 @@ func (a *proxyAgentImpl) transferToSocket(msg *scrpc.Message) (*scrpc.Message, e
 			throttleKey := header.SenderServiceName + "." + header.ReceiverServiceName + "." + header.ReceiverMethodName
 			e, b = api.Entry(throttleKey, api.WithTrafficType(base.Inbound))
 			if b != nil {
+				logrus.Info("throttled")
 				retMsg = scrpc.FromBody(nil, &scrpc_gen.Header{
 					MessageType: scrpc_gen.Header_THROTTLED,
 				})

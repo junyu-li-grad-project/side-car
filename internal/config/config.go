@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -19,6 +20,7 @@ const (
 	EnvCfgGetTimeout    = "SC_ETCD_GET_TIMEOUT"
 	EnvInitialPoolSize  = "SC_POOL_INIT_SIZE"
 	EnvMaxPoolSize      = "SC_POOL_MAX_SIZE"
+	EnvServiceName      = "SC_SERVICE_NAME"
 )
 
 type Config struct {
@@ -36,6 +38,10 @@ type Config struct {
 	InitialPoolSize int
 	// MaxPoolSize is the maximum size state of connection pools
 	MaxPoolSize int
+	// ServiceID is the name of service that the side-car serves
+	ServiceID string
+	// ServiceKey is the auth string to authenticate the service
+	ServiceKey string
 }
 
 func (c *Config) ETCDGetTimeout() time.Duration {
@@ -51,6 +57,10 @@ func Init() (*Config, error) {
 		ConfigGetTimeout: envInt[int](EnvCfgGetTimeout, 3),
 		InitialPoolSize:  envInt[int](EnvInitialPoolSize, 10),
 		MaxPoolSize:      envInt[int](EnvMaxPoolSize, 50),
+		ServiceID:        envStr(EnvServiceName, ""),
+	}
+	if len(cfg.ServiceID) == 0 {
+		return nil, errors.New("the service name is not specified")
 	}
 
 	return cfg, nil
