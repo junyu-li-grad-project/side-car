@@ -107,7 +107,7 @@ func (a *proxyAgentImpl) Start() {
 }
 
 func (a *proxyAgentImpl) refreshFlowControlRules() {
-	interval := time.Second
+	interval := time.Minute
 	ticker := time.NewTicker(interval)
 	for !a.canTransferLoopMessage.Load() {
 		time.Sleep(time.Second)
