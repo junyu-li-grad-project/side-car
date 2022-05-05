@@ -319,6 +319,8 @@ github.com/victor-leee/scrpc v0.0.0-20220425090807-1a81e1835101 h1:VziiASX0LTSJ2
 github.com/victor-leee/scrpc v0.0.0-20220425090807-1a81e1835101/go.mod h1:Wr1pytft+IW8kbh0JiIqlQzvaDDMYPMI6aHbRXZSGu0=
 github.com/victor-leee/scrpc v0.0.0-20220426140636-43e8d68ff575 h1:GERvpgLrxSjVvJ3B6SnoMj1XVhGybasYF5PQvcBixQk=
 github.com/victor-leee/scrpc v0.0.0-20220426140636-43e8d68ff575/go.mod h1:Wr1pytft+IW8kbh0JiIqlQzvaDDMYPMI6aHbRXZSGu0=
+github.com/victor-leee/scrpc v0.0.0-20220505190006-ca66773e10c8 h1:qHFg73Tjqr4WF+zWQkLfxnPqts9j8WmKeTb17yRqm2c=
+github.com/victor-leee/scrpc v0.0.0-20220505190006-ca66773e10c8/go.mod h1:Wr1pytft+IW8kbh0JiIqlQzvaDDMYPMI6aHbRXZSGu0=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2/go.mod h1:UETIi67q53MR2AWcXfiuqkDkRtnGDLqkBTpCHuJHxtU=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
@@ -435,6 +437,8 @@ golang.org/x/sys v0.0.0-20220405210540-1e041c57c461 h1:kHVeDEnfKn3T238CvrUcz6KeE
 golang.org/x/sys v0.0.0-20220405210540-1e041c57c461/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.0.0-20220422013727-9388b58f7150 h1:xHms4gcpe1YE7A3yIllJXP16CMAGuqwO2lX1mTyyRRc=
 golang.org/x/sys v0.0.0-20220422013727-9388b58f7150/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.0.0-20220503163025-988cb79eb6c6 h1:nonptSpoQ4vQjyraW20DXPAglgQfVnM9ZC6MmNLMR60=
+golang.org/x/sys v0.0.0-20220503163025-988cb79eb6c6/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
 golang.org/x/text v0.3.2/go.mod h1:bEr9sfX3Q8Zfm5fL9x+3itogRgK3+ptLWKqgva+5dAk=
