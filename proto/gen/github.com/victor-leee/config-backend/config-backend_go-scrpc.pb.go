@@ -19,6 +19,7 @@ func init() {
 type ConfigBackendService interface {
 	GetConfig(ctx context.Context, req *GetConfigRequest) (*GetConfigResponse, error)
 	PutConfig(ctx context.Context, req *PutConfigRequest) (*PutConfigResponse, error)
+	GetAllKeys(ctx context.Context, req *GetAllKeysRequest) (*GetAllKeysResponse, error)
 }
 
 type ConfigBackendServiceImpl struct {
@@ -43,6 +44,18 @@ func (*ConfigBackendServiceImpl) PutConfig(ctx context.Context, req *PutConfigRe
 		Req:           req,
 		ReqService:    "config-backend-victor-leee-github-com",
 		ReqMethod:     "PutConfig",
+		SenderService: "side-car",
+		Resp:          resp,
+	})
+	return resp, err
+}
+func (*ConfigBackendServiceImpl) GetAllKeys(ctx context.Context, req *GetAllKeysRequest) (*GetAllKeysResponse, error) {
+	resp := &GetAllKeysResponse{}
+	err := client.UnaryRPCRequest(&scrpc.RequestContext{
+		Ctx:           ctx,
+		Req:           req,
+		ReqService:    "config-backend-victor-leee-github-com",
+		ReqMethod:     "GetAllKeys",
 		SenderService: "side-car",
 		Resp:          resp,
 	})

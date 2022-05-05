@@ -35,7 +35,18 @@ message PutConfigResponse {
   BaseResponse base_response = 1;
 }
 
+message GetAllKeysRequest {
+  string service_id = 1;
+  string service_key = 2;
+}
+
+message GetAllKeysResponse {
+  BaseResponse base_response = 1;
+  repeated string keys = 2;
+}
+
 service ConfigBackendService {
   rpc GetConfig(GetConfigRequest) returns (GetConfigResponse) {}
   rpc PutConfig(PutConfigRequest) returns (PutConfigResponse) {}
+  rpc GetAllKeys(GetAllKeysRequest) returns (GetAllKeysResponse) {}
 }
